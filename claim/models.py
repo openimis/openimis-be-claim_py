@@ -31,7 +31,7 @@ class ClaimAdmin(models.Model):
 
     audit_user_id = models.IntegerField(
         db_column='AuditUserId', blank=True, null=True)
-    row_id = models.TextField(db_column='RowId', blank=True, null=True)
+    row_id = models.BinaryField(db_column='RowId', blank=True, null=True)
 
     class Meta:
         managed = False
@@ -49,11 +49,38 @@ class ClaimDiagnosisCode(models.Model):
         db_column='ValidityTo', blank=True, null=True)
 
     audit_user_id = models.IntegerField(db_column='AuditUserID')
-    row_id = models.TextField(db_column='RowID', blank=True, null=True)
+    row_id = models.BinaryField(db_column='RowID', blank=True, null=True)
 
     class Meta:
         managed = False
         db_table = 'tblICDCodes'
+
+
+class Feedback(models.Model):
+    id = models.AutoField(db_column='FeedbackID', primary_key=True)
+    legacy_id = models.IntegerField(db_column='LegacyID', blank=True, null=True)
+    care_rendered = models.BooleanField(
+        db_column='CareRendered', blank=True, null=True)
+    payment_asked = models.BooleanField(
+        db_column='PaymentAsked', blank=True, null=True)
+    drug_prescribed = models.BooleanField(
+        db_column='DrugPrescribed', blank=True, null=True)
+    drug_received = models.BooleanField(
+        db_column='DrugReceived', blank=True, null=True)
+    asessment = models.SmallIntegerField(
+        db_column='Asessment', blank=True, null=True)
+    chf_officer_code = models.IntegerField(
+        db_column='CHFOfficerCode', blank=True, null=True)
+    feedback_date = fields.DateTimeField(
+        db_column='FeedbackDate', blank=True, null=True)
+    validity_from = fields.DateTimeField(db_column='ValidityFrom')
+    validity_to = fields.DateTimeField(
+        db_column='ValidityTo', blank=True, null=True)
+    audit_user_id = models.IntegerField(db_column='AuditUserID')
+
+    class Meta:
+        managed = False
+        db_table = 'tblFeedback'
 
 
 class Claim(models.Model):
@@ -84,7 +111,8 @@ class Claim(models.Model):
     date_processed = fields.DateField(
         db_column='DateProcessed', blank=True, null=True)
     feedback = models.BooleanField(db_column='Feedback')
-    # feedbackid = models.ForeignKey('Tblfeedback', models.DO_NOTHING, db_column='FeedbackID', blank=True, null=True)
+    feedback = models.OneToOneField(
+        Feedback, models.DO_NOTHING, db_column='FeedbackID', blank=True, null=True)
     explanation = models.TextField(
         db_column='Explanation', blank=True, null=True)
     feedback_status = models.SmallIntegerField(
@@ -135,7 +163,7 @@ class Claim(models.Model):
         db_column='AuditUserIDSubmit', blank=True, null=True)
     audit_user_id_process = models.IntegerField(
         db_column='AuditUserIDProcess', blank=True, null=True)
-    row_id = models.TextField(db_column='RowID', blank=True, null=True)
+    row_id = models.BinaryField(db_column='RowID', blank=True, null=True)
 
     class Meta:
         managed = False
