@@ -1,5 +1,6 @@
 from django.db import connection
 import xml.etree.ElementTree as ET
+from django.core.exceptions import PermissionDenied
 
 
 class ClaimElementSubmit(object):
@@ -21,16 +22,17 @@ class ClaimElementSubmit(object):
 class ClaimItemSubmit(ClaimElementSubmit):
     def __init__(self, code, quantity, price=None):
         super().__init__(type='Item',
-                                                 code=code,
-                                                 price=price,
-                                                 quantity=quantity)
+                         code=code,
+                         price=price,
+                         quantity=quantity)
+
 
 class ClaimServiceSubmit(ClaimElementSubmit):
     def __init__(self, code, quantity, price=None):
         super().__init__(type='Service',
-                                                 code=code,
-                                                 price=price,
-                                                 quantity=quantity)                                                 
+                         code=code,
+                         price=price,
+                         quantity=quantity)
 
 
 class ClaimSubmit(object):
@@ -93,11 +95,11 @@ class ClaimSubmit(object):
             ET.SubElement(xmlelt, 'VisitType').text = "%s" % self.visit_type
         if self.guarantee_no:
             ET.SubElement(
-                xmlelt, 'GuaranteeNo').text = "%s" % self.guarantee_no        
+                xmlelt, 'GuaranteeNo').text = "%s" % self.guarantee_no
 
     def add_to_xmlelt(self, xmlelt):
         details = ET.SubElement(xmlelt, 'Details')
-        self._details_to_xmlelt(details)      
+        self._details_to_xmlelt(details)
 
         if self.items and len(self.items) > 0:
             items = ET.SubElement(xmlelt, 'Items')
@@ -107,7 +109,7 @@ class ClaimSubmit(object):
         if self.services and len(self.services) > 0:
             services = ET.SubElement(xmlelt, 'Services')
             for service in self.services:
-                service.add_to_xmlelt(services)                
+                service.add_to_xmlelt(services)
 
     def to_xml(self):
         claim_xml = ET.Element('Claim')
@@ -138,18 +140,25 @@ class ClaimSubmitError(Exception):
         return "ClaimSubmitError %s: %s" % (self.code, self.msg)
 
 
-def submit_claim(claim_submit):
-    with connection.cursor() as cur:
-        sql = """\
-            DECLARE @ret int;
-            EXEC @ret = [dbo].[uspUpdateClaimFromPhone] @XML = %s;
-            SELECT @ret;
-        """
+class ClaimSubmitService(object):
 
-        cur.execute(sql, (claim_submit.to_xml(),))
-        cur.nextset()  # skip 'DECLARE...' (non) result
-        cur.nextset()  # skip 'EXEC...' (non) result
-        if cur.description is None:  # 0 is considered as 'no result' by pyodbc
-            return
-        res = cur.fetchone()[0]  # FETCH 'SELECT @res' returned value
-        raise ClaimSubmitError(res)
+    def __init__(self, user):
+        self.user = user
+
+    def submit(self, claim_submit):
+        if self.user.is_anonymous or not self.user.has_perm('claim.can_add'):
+            raise PermissionDenied
+        with connection.cursor() as cur:
+            sql = """\
+                DECLARE @ret int;
+                EXEC @ret = [dbo].[uspUpdateClaimFromPhone] @XML = %s;
+                SELECT @ret;
+            """
+
+            cur.execute(sql, (claim_submit.to_xml(),))
+            cur.nextset()  # skip 'DECLARE...' (non) result
+            cur.nextset()  # skip 'EXEC...' (non) result
+            if cur.description is None:  # 0 is considered as 'no result' by pyodbc
+                return
+            res = cur.fetchone()[0]  # FETCH 'SELECT @res' returned value
+            raise ClaimSubmitError(res)
