@@ -96,7 +96,7 @@ class Claim(models.Model):
     date_to = fields.DateField(db_column='DateTo', blank=True, null=True)
     status = models.SmallIntegerField(db_column='ClaimStatus')
     adjuster = models.ForeignKey(
-        core_models.User, models.DO_NOTHING, db_column='Adjuster', blank=True, null=True)
+        core_models.InteractiveUser, models.DO_NOTHING, db_column='Adjuster', blank=True, null=True)
     adjustment = models.TextField(
         db_column='Adjustment', blank=True, null=True)
     claimed = models.DecimalField(
