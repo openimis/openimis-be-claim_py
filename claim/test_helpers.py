@@ -1,4 +1,4 @@
-from claim.models import Claim, ClaimService, ClaimItem
+from claim.models import Claim, ClaimService, ClaimItem, ClaimDedRem
 from claim.validations import get_claim_category, approved_amount
 from medical.test_helpers import get_item_of_type, get_service_of_category
 
@@ -62,3 +62,15 @@ def mark_test_claim_as_processed(claim, status=Claim.STATUS_CHECKED, audit_user_
     claim.submit_stamp = TimeUtils.now()
     claim.category = get_claim_category(claim)
     claim.save()
+
+
+def delete_claim_with_itemsvc_dedrem_and_history(claim):
+    # first delete old versions of the claim
+    ClaimDedRem.objects.filter(claim=claim).delete()
+    old_claims = Claim.objects.filter(legacy_id=claim.id)
+    ClaimItem.objects.filter(claim__in=old_claims).delete()
+    ClaimService.objects.filter(claim__in=old_claims).delete()
+    old_claims.delete()
+    claim.items.all().delete()
+    claim.services.all().delete()
+    claim.delete()

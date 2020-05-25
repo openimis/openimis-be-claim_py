@@ -17,7 +17,7 @@ from django.db.models.functions import Coalesce, Cast
 from django.utils.translation import gettext as _
 from graphene import InputObjectType
 from location.schema import UserDistrict
-from .models import Claim, Feedback, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment
+from .models import Claim, Feedback, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, ClaimDedRem
 from product.models import ProductItemOrService
 
 logger = logging.getLogger(__name__)
@@ -612,6 +612,15 @@ def set_claims_status(uuids, field, status):
     return errors
 
 
+def delete_claim_dedrems(uuids):
+    # We could do it in one query with filter(claim__uuid__in=uuids) but we'd loose the logging
+    for uuid in uuids:
+        # TODO add some safegards on the delete filter
+        deleted_dedrems = ClaimDedRem.objects.filter(claim__uuid=uuid).delete()
+        if deleted_dedrems:
+            logger.debug(f"delivering review on {uuid} deleted {deleted_dedrems} dedrems")
+
+
 class SelectClaimsForFeedbackMutation(OpenIMISMutation):
     """
     Select one or several claims for feedback.
@@ -698,7 +707,7 @@ class DeliverClaimFeedbackMutation(OpenIMISMutation):
                 defaults=feedback
             )
             claim.feedback = f
-            claim.feedback_status = 8
+            claim.feedback_status = Claim.FEEDBACK_DELIVERED
             claim.feedback_available = True
             claim.save()
             return None
@@ -756,7 +765,9 @@ class DeliverClaimsReviewMutation(OpenIMISMutation):
     def async_mutate(cls, user, **data):
         if not user.has_perms(ClaimConfig.gql_mutation_deliver_claim_review_perms):
             raise PermissionDenied(_("unauthorized"))
-        return set_claims_status(data['uuids'], 'review_status', 8)
+        # OMT-208 clear the dedrem for the reviewed claims, will be computed again on "process"
+        delete_claim_dedrems(data['uuids'])
+        return set_claims_status(data['uuids'], 'review_status', Claim.REVIEW_DELIVERED)
 
 class SkipClaimsReviewMutation(OpenIMISMutation):
     """
