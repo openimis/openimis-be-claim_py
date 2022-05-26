@@ -250,6 +250,7 @@ def process_child_relation(user, data_children,
             elt.validity_from = TimeUtils.now()
             elt.audit_user_id = user.id_for_audit
             elt.claim_id = claim_id
+            elt.validity_to = None
             elt.save()
         else:
             data_elt['validity_from'] = TimeUtils.now()
@@ -323,9 +324,12 @@ def update_or_create_claim(data, user):
     else:
         claim = Claim.objects.create(**data)
     claimed = 0
+    from core.utils import TimeUtils
+    claim.items.update(validity_to=TimeUtils.now())
     claimed += process_child_relation(user, items,
                                       claim.id, claim.items,
                                       item_create_hook)
+    claim.services.update(validity_to=TimeUtils.now())
     claimed += process_child_relation(user, services,
                                       claim.id, claim.services,
                                       service_create_hook)
