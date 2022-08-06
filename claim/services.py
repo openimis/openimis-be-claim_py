@@ -1,11 +1,22 @@
 import xml.etree.ElementTree as ET
-from django.core.exceptions import PermissionDenied
+
+from medical.models import Item, Service
+
 import core
-from django.db import connection
+from django.db import connection, transaction
 from gettext import gettext as _
 
+from core.signals import register_service_signal
 from .apps import ClaimConfig
 from django.conf import settings
+
+from claim.models import Claim, ClaimItem, ClaimService
+from claim.utils import process_items_relations, process_services_relations
+from .validations import validate_claim, validate_assign_prod_to_claimitems_and_services, process_dedrem, \
+    approved_amount, get_claim_category
+
+from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import PermissionDenied, ValidationError
 
 
 @core.comparable
@@ -24,6 +35,9 @@ class ClaimElementSubmit(object):
         ET.SubElement(item, "%sQuantity" %
                       self.type).text = "%s" % self.quantity
 
+    def to_claim_provision(self):
+        raise NotImplementedError()
+
 
 @core.comparable
 class ClaimItemSubmit(ClaimElementSubmit):
@@ -33,6 +47,10 @@ class ClaimItemSubmit(ClaimElementSubmit):
                          price=price,
                          quantity=quantity)
 
+    def to_claim_provision(self):
+        item = Item.objects.filter(validity_to__isnull=True, code=self.code).get()
+        return ClaimItem(qty_provided=self.quantity, price_asked=self.price, item=item)
+
 
 @core.comparable
 class ClaimServiceSubmit(ClaimElementSubmit):
@@ -41,6 +59,10 @@ class ClaimServiceSubmit(ClaimElementSubmit):
                          code=code,
                          price=price,
                          quantity=quantity)
+
+    def to_claim_provision(self):
+        service = Service.objects.filter(validity_to__isnull=True, code=self.code).get()
+        return ClaimService(qty_provided=self.quantity, price_asked=self.price, service=service)
 
 
 @core.comparable
@@ -153,18 +175,10 @@ class ClaimSubmitService(object):
     def __init__(self, user):
         self.user = user
 
-    def hf_scope_check(self, claim_submit):
-        from location.models import UserDistrict, HealthFacility
-        dist = UserDistrict.get_user_districts(self.user._u)
-        hf = HealthFacility.filter_queryset()\
-            .filter(code=claim_submit.health_facility_code)\
-            .filter(location_id__in=[l.location_id for l in dist])\
-            .first()
-        if not hf and settings.ROW_SECURITY:
-            raise ClaimSubmitError("Invalid health facility code or health facility not allowed for user")
+    def hf_scope_check(self, claim_submit: ClaimSubmit):
+        self._validate_user_hf(claim_submit.health_facility_code)
 
     def submit(self, claim_submit):
-        self.hf_scope_check(claim_submit)
         with connection.cursor() as cur:
             sql = """\
                 DECLARE @ret int;
@@ -179,6 +193,67 @@ class ClaimSubmitService(object):
                 return
             res = cur.fetchone()[0]  # FETCH 'SELECT @ret' returned value
             raise ClaimSubmitError(res)
+
+    @register_service_signal('claim.enter_and_submit_claim')
+    @transaction.atomic
+    def enter_and_submit(self, claim: dict, rule_engine_validation: bool = True) -> Claim:
+        create_claim_service = ClaimCreateService(self.user)
+        entered_claim = create_claim_service.enter_claim(claim)
+        submitted_claim = self.submit_claim(entered_claim, rule_engine_validation)
+        return submitted_claim
+
+    @register_service_signal('claim.submit_claim')
+    def submit_claim(self, claim: Claim, rule_engine_validation=True):
+        """
+        Submission based on the GQL SubmitClaimMutation.async_mutate
+        """
+        self._validate_submit_permissions()
+        self._validate_user_hf(claim.health_facility.code)
+        claim.save_history()
+
+        if rule_engine_validation:
+            validation_errors = self._validate_claim(claim)
+            if validation_errors:
+                return self.__submit_to_rejected(claim)
+
+        return self.__submit_to_checked(claim)
+
+    def _validate_submit_permissions(self):
+        if type(self.user) is AnonymousUser or not self.user.id:
+            raise ValidationError(
+                _("mutation.authentication_required"))
+        if not self.user.has_perms(ClaimConfig.gql_mutation_submit_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    def _validate_user_hf(self, hf_code):
+        from location.models import UserDistrict, HealthFacility
+        dist = UserDistrict.get_user_districts(self.user._u)
+        hf = HealthFacility.filter_queryset().filter(code=hf_code)\
+            .filter(location_id__in=[l.location_id for l in dist])\
+            .exists()
+        if not hf and settings.ROW_SECURITY:
+            raise ClaimSubmitError("Invalid health facility code or health facility not allowed for user")
+
+    def _validate_claim(self, claim):
+        errors = validate_claim(claim, True)
+        if not errors:
+            errors = validate_assign_prod_to_claimitems_and_services(claim)
+            errors += process_dedrem(claim, self.user.id_for_audit, False)
+        return errors or []
+
+    def __submit_to_rejected(self, claim: Claim):
+        claim.status = Claim.STATUS_REJECTED
+        claim.save()
+        return claim
+
+    def __submit_to_checked(self, claim: Claim):
+        claim.approved = approved_amount(claim)
+        claim.status = Claim.STATUS_CHECKED
+        from core.utils import TimeUtils
+        claim.submit_stamp = TimeUtils.now()
+        claim.category = get_claim_category(claim)
+        claim.save()
+        return claim
 
 
 def formatClaimService(s):
@@ -238,3 +313,63 @@ class ClaimReportService(object):
             "services": [formatClaimService(s) for s in claim.services.all()],
             "items": [formatClaimItem(i) for i in claim.items.all()],
         }
+
+
+class ClaimCreateService:
+    def __init__(self, user):
+        self.user = user
+
+    def _validate_user_hf(self, hf_id):
+        from location.models import UserDistrict, HealthFacility
+        dist = UserDistrict.get_user_districts(self.user._u)
+        hf = HealthFacility.filter_queryset().filter(id=hf_id)\
+            .filter(location_id__in=[l.location_id for l in dist])\
+            .exists()
+        if not hf and settings.ROW_SECURITY:
+            raise ValidationError("Invalid health facility code or health facility not allowed for user")
+
+    @register_service_signal('claim.enter_claim')
+    def enter_claim(self, claim: dict):
+        """
+        Implementation based on the GQL CreateClaimMutation.async_mutate
+        """
+        self._validate_permissions()
+        self._validate_claim_fields(claim)
+        self._validate_user_hf(claim.get('health_facility_id', None))
+        self._ensure_entered_claim_fields(claim)
+        claim = self._create_claim_from_dict(claim)
+        return claim
+
+    def _validate_permissions(self):
+        if type(self.user) is AnonymousUser or not self.user.id:
+            raise ValidationError(
+                _("mutation.authentication_required"))
+        if not self.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    def _validate_claim_fields(self, claim):
+        if not claim.get('code'):
+            raise ValidationError("Provided claim without code.")
+
+        if Claim.objects.filter(code=claim['code'], validity_to__isnull=True).exists():
+            raise ValidationError(F"Claim with code '{claim['code']}' already exists.")
+
+    def _ensure_entered_claim_fields(self, claim_submit_data):
+        claim_submit_data['audit_user_id'] = self.user.id_for_audit
+        claim_submit_data['status'] = Claim.STATUS_ENTERED
+        from core.utils import TimeUtils
+        claim_submit_data['validity_from'] = TimeUtils.now()
+
+    def _create_claim_from_dict(self, claim_submit_data):
+        items = claim_submit_data.pop('items', [])
+        services = claim_submit_data.pop('services', [])
+        claim = Claim.objects.create(**claim_submit_data)
+        self.__process_items(claim, items, services)
+        claim.save()
+        return claim
+
+    def __process_items(self, claim, items, services):
+        claimed = 0
+        claimed += process_items_relations(self.user, claim, items)
+        claimed += process_services_relations(self.user, claim, services)
+        claim.claimed = claimed
