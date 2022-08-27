@@ -1,5 +1,5 @@
-from claim.models import ClaimItem, ClaimService, ClaimDetail
-
+from claim.models import ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem ,ClaimServiceService
+from medical.models import Item, Service
 
 def process_child_relation(user, data_children, claim_id, children, create_hook):
     claimed = 0
@@ -37,7 +37,38 @@ def item_create_hook(claim_id, item):
 
 
 def service_create_hook(claim_id, service):
-    ClaimService.objects.create(claim_id=claim_id, **service)
+    serviceLinked = service.serviceLinked
+    serviceserviceSet = service.serviceserviceSet
+    service.pop('serviceLinked', None)
+    service.pop('serviceserviceSet', None)
+    ClaimServiceId = ClaimService.objects.create(claim_id=claim_id, **service)
+    if(serviceLinked):
+        for serviceL in serviceLinked:
+            serviceL.pop('subItemCode', None)
+            if serviceL.qty_asked.is_nan() :
+                serviceL.qty_asked = 0
+            itemId = Item.objects.filter(code=serviceL.subItemCode).first()
+            ClaimServiceItem.objects.create(
+                item = itemId,
+                claimlinkedItem = ClaimServiceId,
+                qty_displayed = serviceL.qty_asked,
+                qty_provided = serviceL.qty_provided,
+                price_asked = serviceL.price_asked,
+            )
+
+    if(serviceserviceSet):
+        for serviceserviceS in serviceserviceSet:
+            serviceserviceS.pop('subItemCode', None)
+            if serviceserviceS.qty_asked.is_nan() :
+                serviceserviceS.qty_asked = 0
+            serviceId = Service.objects.filter(code=serviceserviceS.subServiceCode).first()
+            ClaimServiceService.objects.create(
+                service = serviceId,
+                claimlinkedService = ClaimServiceId,
+                qty_displayed = serviceserviceS.qty_asked,
+                qty_provided = serviceserviceS.qty_provided,
+                price_asked = serviceserviceS.price_asked,
+            )
 
 
 def process_items_relations(user, claim, items):

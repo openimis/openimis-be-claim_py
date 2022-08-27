@@ -64,6 +64,26 @@ class ClaimItemInputType(InputObjectType):
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
 
+class ClaimSubServiceInputType(InputObjectType):
+    id = graphene.Int(required=False)
+    subServiceCode = graphene.String(required=True)
+    qty_provided = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    qty_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+
+
+class ClaimSubItemInputType(InputObjectType):
+    id = graphene.Int(required=False)
+    subItemCode = graphene.String(required=True)
+    qty_provided = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    qty_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
 
 class ClaimServiceInputType(InputObjectType):
     id = graphene.Int(required=False)
@@ -103,6 +123,8 @@ class ClaimServiceInputType(InputObjectType):
     price_origin = graphene.String(max_length=1, required=False)
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
+    serviceLinked = graphene.List(ClaimSubItemInputType, required=False)
+    serviceserviceSet = graphene.List(ClaimSubServiceInputType, required=False)
 
 
 class FeedbackInputType(InputObjectType):
@@ -222,6 +244,7 @@ class ClaimInputType(OpenIMISMutation.Input):
     services = graphene.List(ClaimServiceInputType, required=False)
 
 
+
 class CreateClaimInputType(ClaimInputType):
     attachments = graphene.List(ClaimAttachmentInputType, required=False)
 
@@ -326,6 +349,8 @@ class CreateClaimMutation(OpenIMISMutation):
                 return [{
                     'message': _("claim.mutation.duplicated_claim_code") % {'code': data['code']},
                 }]
+            print("Async Mutate")
+            print(data)
             data['audit_user_id'] = user.id_for_audit
             data['status'] = Claim.STATUS_ENTERED
             from core.utils import TimeUtils
