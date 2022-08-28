@@ -497,7 +497,7 @@ class ClaimServiceService(models.Model):
     service = models.ForeignKey(medical_models.Service, models.DO_NOTHING,
                               db_column='ServiceId', related_name='claimServices')
     claimlinkedService = models.ForeignKey( ClaimService,
-                                          models.DO_NOTHING, db_column="claimlinkedService")
+                                          models.DO_NOTHING, db_column="claimlinkedService", related_name='claimlinkedService')
     qty_provided = models.IntegerField(db_column="qty_provided",
                                       blank=True, null=True)
     qty_displayed = models.IntegerField(db_column="qty_displayed",
