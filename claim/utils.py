@@ -5,7 +5,12 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
     claimed = 0
     from core.utils import TimeUtils
     for data_elt in data_children:
-        claimed += data_elt['qty_provided'] * data_elt['price_asked']
+        print("Process_child_relation")
+        if create_hook==service_create_hook :
+            claimed += calcul_amount_service(data_elt)
+        else:
+            claimed += data_elt['qty_provided'] * data_elt['price_asked']
+
         elt_id = data_elt.pop('id') if 'id' in data_elt else None
         if elt_id:
             # elt has been historized along with claim historization
@@ -28,6 +33,17 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
 
     return claimed
 
+def calcul_amount_service(elt):
+    totalClaimed = 0
+    for serviceLinked in elt['serviceLinked']:
+        if serviceLinked['qty_asked'].is_nan() == False:
+            totalClaimed += serviceLinked['qty_asked'] * serviceLinked['price_asked']
+    for serviceserviceSet in elt['serviceserviceSet']:
+        if serviceserviceSet['qty_asked'].is_nan() == False:
+            totalClaimed += serviceserviceSet['qty_asked'] * serviceserviceSet['price_asked']
+    print(totalClaimed)
+    return totalClaimed
+        
 
 def item_create_hook(claim_id, item):
     # TODO: investigate 'availability' is mandatory,
