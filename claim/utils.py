@@ -34,14 +34,15 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
     return claimed
 
 def calcul_amount_service(elt):
-    totalClaimed = 0
-    for serviceLinked in elt['serviceLinked']:
-        if serviceLinked['qty_asked'].is_nan() == False:
-            totalClaimed += serviceLinked['qty_asked'] * serviceLinked['price_asked']
-    for serviceserviceSet in elt['serviceserviceSet']:
-        if serviceserviceSet['qty_asked'].is_nan() == False:
-            totalClaimed += serviceserviceSet['qty_asked'] * serviceserviceSet['price_asked']
-    print(totalClaimed)
+    totalClaimed = elt['price_asked']
+    if len(elt['serviceLinked'])!=0 and len(elt['serviceserviceSet'])!=0:
+        totalClaimed = 0
+        for serviceLinked in elt['serviceLinked']:
+            if serviceLinked['qty_asked'].is_nan() == False:
+                totalClaimed += serviceLinked['qty_asked'] * serviceLinked['price_asked']
+        for serviceserviceSet in elt['serviceserviceSet']:
+            if serviceserviceSet['qty_asked'].is_nan() == False:
+                totalClaimed += serviceserviceSet['qty_asked'] * serviceserviceSet['price_asked']
     return totalClaimed
         
 
