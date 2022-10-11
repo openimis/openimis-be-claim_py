@@ -11,6 +11,7 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.RunSQL(
-            'CREATE VIEW claim_ClaimAttachmentsCountView AS select claim_id, count(*) attachments_count from claim_ClaimAttachment GROUP BY claim_id'
+            'CREATE VIEW "claim_ClaimAttachmentsCountView" '
+            'AS select claim_id, count(*) attachments_count from "claim_ClaimAttachment" GROUP BY claim_id'
         ),
     ]

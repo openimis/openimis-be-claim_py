@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
             name='ClaimAttachment',
             fields=[
                 ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('legacy_id', models.IntegerField(blank=True, db_column='LegacyID', null=True)),
+                ('legacy_id', models.UUIDField(blank=True, db_column='LegacyID', null=True)),
                 ('validity_from', core.fields.DateTimeField(db_column='ValidityFrom')),
                 ('validity_to', core.fields.DateTimeField(blank=True, db_column='ValidityTo', null=True)),
                 ('type', models.TextField(blank=True, null=True)),

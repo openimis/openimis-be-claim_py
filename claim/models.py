@@ -86,10 +86,10 @@ class Feedback(core_models.VersionedModel):
     uuid = models.CharField(db_column='FeedbackUUID', max_length=36, default=uuid.uuid4, unique=True)
     claim = models.OneToOneField(
         "Claim", models.DO_NOTHING, db_column='ClaimID', blank=True, null=True, related_name="+")
-    care_rendered = models.NullBooleanField(db_column='CareRendered', blank=True, null=True)
-    payment_asked = models.NullBooleanField(db_column='PaymentAsked', blank=True, null=True)
-    drug_prescribed = models.NullBooleanField(db_column='DrugPrescribed', blank=True, null=True)
-    drug_received = models.NullBooleanField(db_column='DrugReceived', blank=True, null=True)
+    care_rendered = models.BooleanField(db_column='CareRendered', blank=True, null=True)
+    payment_asked = models.BooleanField(db_column='PaymentAsked', blank=True, null=True)
+    drug_prescribed = models.BooleanField(db_column='DrugPrescribed', blank=True, null=True)
+    drug_received = models.BooleanField(db_column='DrugReceived', blank=True, null=True)
     asessment = models.SmallIntegerField(db_column='Asessment', blank=True, null=True)
     # No FK in database (so value may not be an existing officer.id !)
     officer_id = models.IntegerField(db_column='CHFOfficerCode', blank=True, null=True)
@@ -217,6 +217,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
         db_column='AuditUserIDSubmit', blank=True, null=True)
     audit_user_id_process = models.IntegerField(
         db_column='AuditUserIDProcess', blank=True, null=True)
+
     # row_id = models.BinaryField(db_column='RowID', blank=True, null=True)
 
     class Meta:
