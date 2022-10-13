@@ -554,34 +554,66 @@ def get_products(target_date, elt_id, insuree_id, adult, item_or_service):
     # tblProduct.MaxTreatment, tblProduct.MaxOPTreatment, tblProduct.MaxIPTreatment,
     # tblProduct.DedPolicy, tblProduct.DedOPPolicy, tblProduct.DedIPPolicy,
     # tblProduct.MaxPolicy, tblProduct.MaxOPPolicy, tblProduct.MaxIPPolicy
-    sql = f"""
-        SELECT 
-            tblProduct.ProdID, tblProduct{item_or_service}s.Prod{item_or_service}ID,            
-            tblInsureePolicy.EffectiveDate,
-            tblPolicy.EffectiveDate,
-            CASE
-                WHEN tblPolicy.ExpiryDate < tblInsureePolicy.ExpiryDate THEN tblPolicy.ExpiryDate
-                ELSE tblInsureePolicy.ExpiryDate
-            END AS ExpiryDate,
-            tblPolicy.PolicyStage
-        FROM tblInsuree 
-            INNER JOIN tblInsureePolicy ON tblInsureePolicy.InsureeID = tblInsuree.InsureeID
-            LEFT OUTER JOIN tblPolicy
-            LEFT OUTER JOIN  tblProduct ON tblPolicy.ProdID = tblProduct.ProdID
-            INNER JOIN tblProduct{item_or_service}s ON tblProduct.ProdID = tblProduct{item_or_service}s.ProdID            
-            RIGHT OUTER JOIN tblFamilies ON tblPolicy.FamilyID = tblFamilies.FamilyID
-            ON tblInsuree.FamilyID = tblFamilies.FamilyID
-        WHERE (tblInsuree.ValidityTo IS NULL) AND (tblInsuree.InsureeId = %s)
-            AND (tblInsureePolicy.PolicyId = tblPolicy.PolicyID)
-            AND (tblPolicy.ValidityTo IS NULL)
-            AND (tblPolicy.EffectiveDate <= %s) AND (tblPolicy.ExpiryDate >= %s)
-            AND (tblInsureePolicy.ValidityTo IS NULL)
-            AND (tblInsureePolicy.EffectiveDate <= %s) AND (tblInsureePolicy.ExpiryDate >= %s)
-            AND (tblPolicy.PolicyStatus in ({Policy.STATUS_ACTIVE}, {Policy.STATUS_EXPIRED}))
-            AND (tblProduct{item_or_service}s.ValidityTo IS NULL) AND (tblProduct{item_or_service}s.{item_or_service}ID = %s)
-        ORDER BY DATEADD(m,ISNULL(tblProduct{item_or_service}s.{waiting_period}, 0),
-            tblPolicy.EffectiveDate)            
-    """
+    if connection.vendor == "postgresql":
+        sql = f"""
+                    SELECT 
+                        "tblProduct"."ProdID", "tblProduct{item_or_service}s"."Prod{item_or_service}ID",            
+                        "tblInsureePolicy"."EffectiveDate",
+                        "tblPolicy"."EffectiveDate",
+                        CASE
+                            WHEN "tblPolicy"."ExpiryDate" < "tblInsureePolicy"."ExpiryDate" THEN "tblPolicy"."ExpiryDate"
+                            ELSE "tblInsureePolicy"."ExpiryDate"
+                        END AS "ExpiryDate",
+                        "tblPolicy"."PolicyStage"
+                    FROM "tblInsuree" 
+                        INNER JOIN "tblInsureePolicy" ON "tblInsureePolicy"."InsureeID" = "tblInsuree"."InsureeID"
+                        LEFT OUTER JOIN "tblPolicy"
+                        LEFT OUTER JOIN "tblProduct" ON "tblPolicy"."ProdID" = "tblProduct"."ProdID"
+                        INNER JOIN "tblProduct{item_or_service}s" 
+                            ON "tblProduct"."ProdID" = "tblProduct{item_or_service}s"."ProdID"            
+                        RIGHT OUTER JOIN "tblFamilies" ON "tblPolicy"."FamilyID" = "tblFamilies"."FamilyID"
+                        ON "tblInsuree"."FamilyID" = "tblFamilies"."FamilyID"
+                    WHERE ("tblInsuree"."ValidityTo" IS NULL) AND ("tblInsuree"."InsureeID" = %s)
+                        AND ("tblInsureePolicy"."PolicyId" = "tblPolicy"."PolicyID")
+                        AND ("tblPolicy"."ValidityTo" IS NULL)
+                        AND ("tblPolicy"."EffectiveDate" <= %s) AND ("tblPolicy"."ExpiryDate" >= %s)
+                        AND ("tblInsureePolicy"."ValidityTo" IS NULL)
+                        AND ("tblInsureePolicy"."EffectiveDate" <= %s) AND ("tblInsureePolicy"."ExpiryDate" >= %s)
+                        AND ("tblPolicy"."PolicyStatus" in ({Policy.STATUS_ACTIVE}, {Policy.STATUS_EXPIRED}))
+                        AND ("tblProduct{item_or_service}s"."ValidityTo" IS NULL) 
+                            AND ("tblProduct{item_or_service}s"."{item_or_service}ID" = %s)
+                    ORDER BY "tblPolicy"."EffectiveDate" + coalesce("tblProduct{item_or_service}s"."{waiting_period}", 0) 
+                        * INTERVAL '1 MONTH'            
+                """
+    else:
+        sql = f"""
+            SELECT 
+                tblProduct.ProdID, tblProduct{item_or_service}s.Prod{item_or_service}ID,            
+                tblInsureePolicy.EffectiveDate,
+                tblPolicy.EffectiveDate,
+                CASE
+                    WHEN tblPolicy.ExpiryDate < tblInsureePolicy.ExpiryDate THEN tblPolicy.ExpiryDate
+                    ELSE tblInsureePolicy.ExpiryDate
+                END AS ExpiryDate,
+                tblPolicy.PolicyStage
+            FROM tblInsuree 
+                INNER JOIN tblInsureePolicy ON tblInsureePolicy.InsureeID = tblInsuree.InsureeID
+                LEFT OUTER JOIN tblPolicy
+                LEFT OUTER JOIN  tblProduct ON tblPolicy.ProdID = tblProduct.ProdID
+                INNER JOIN tblProduct{item_or_service}s ON tblProduct.ProdID = tblProduct{item_or_service}s.ProdID            
+                RIGHT OUTER JOIN tblFamilies ON tblPolicy.FamilyID = tblFamilies.FamilyID
+                ON tblInsuree.FamilyID = tblFamilies.FamilyID
+            WHERE (tblInsuree.ValidityTo IS NULL) AND (tblInsuree.InsureeId = %s)
+                AND (tblInsureePolicy.PolicyId = tblPolicy.PolicyID)
+                AND (tblPolicy.ValidityTo IS NULL)
+                AND (tblPolicy.EffectiveDate <= %s) AND (tblPolicy.ExpiryDate >= %s)
+                AND (tblInsureePolicy.ValidityTo IS NULL)
+                AND (tblInsureePolicy.EffectiveDate <= %s) AND (tblInsureePolicy.ExpiryDate >= %s)
+                AND (tblPolicy.PolicyStatus in ({Policy.STATUS_ACTIVE}, {Policy.STATUS_EXPIRED}))
+                AND (tblProduct{item_or_service}s.ValidityTo IS NULL) AND (tblProduct{item_or_service}s.{item_or_service}ID = %s)
+            ORDER BY DATEADD(m,ISNULL(tblProduct{item_or_service}s.{waiting_period}, 0),
+                tblPolicy.EffectiveDate)            
+        """
     cursor.execute(sql,
                    [insuree_id, target_date, target_date, target_date, target_date, elt_id])
     return cursor
