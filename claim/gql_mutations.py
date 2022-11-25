@@ -21,7 +21,9 @@ from graphene import InputObjectType
 from location.schema import UserDistrict
 
 from claim.gql_queries import ClaimGQLType
-from claim.models import Claim, Feedback, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, ClaimDedRem
+from claim.models import Claim, Feedback, ClaimAttachment, ClaimDedRem
+from claim.models import ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem ,ClaimServiceService
+from medical.models import Item, Service
 from product.models import ProductItemOrService
 
 from claim.utils import process_items_relations, process_services_relations
@@ -815,7 +817,38 @@ class SaveClaimReviewMutation(OpenIMISMutation):
             services = data.pop('services') if 'services' in data else []
             for service in services:
                 service_id = service.pop('id')
+                service.pop('serviceLinked', None)
+                service.pop('serviceserviceSet', None)
+                serviceLinked = service.serviceLinked
+                serviceserviceSet = service.serviceserviceSet
                 claim.services.filter(id=service_id).update(**service)
+                ClaimServiceId = ClaimService.objects.filter(claim=claim.id, service=service.service_id).first()
+                if(serviceLinked):
+                    for serviceL in serviceLinked:
+                        serviceL.pop('subItemCode', None)
+                        if serviceL.qty_asked.is_nan() :
+                            serviceL.qty_asked = 0
+                        itemId = Item.objects.filter(code=serviceL.subItemCode).first()
+                        claimServiceItemId = ClaimServiceItem.objects.filter(
+                            item=itemId,
+                            claimlinkedItem = ClaimServiceId
+                        ).first()
+                        claimServiceItemId.qty_displayed=serviceL.qty_asked
+                        claimServiceItemId.save()
+                
+                if(serviceserviceSet):
+                    for serviceserviceS in serviceserviceSet:
+                        serviceserviceS.pop('subItemCode', None)
+                        if serviceserviceS.qty_asked.is_nan() :
+                            serviceserviceS.qty_asked = 0
+                        serviceId = Service.objects.filter(code=serviceserviceS.subServiceCode).first()
+                        claimServiceServiceId = ClaimServiceService.objects.filter(
+                            service=serviceId,
+                            claimlinkedService = ClaimServiceId
+                        ).first()
+                        claimServiceServiceId.qty_displayed=serviceserviceS.qty_asked
+                        claimServiceServiceId.save()
+
                 if service['status'] == ClaimService.STATUS_PASSED:
                     all_rejected = False
             claim.approved = approved_amount(claim)
