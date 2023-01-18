@@ -103,9 +103,14 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
-    def resolve_claim_admins(self, info, search=None, **kwargs):
+    def resolve_claim_admins(self, info, search=None, hf=None, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_admins_perms):
             raise PermissionDenied(_("unauthorized"))
+
+        queryset = ClaimAdmin.object.filter().all()
+        print(**kwargs)
+        print(ClaimAdmin.object.all())
+
 
         if search is not None:
             return ClaimAdmin.objects.filter(
