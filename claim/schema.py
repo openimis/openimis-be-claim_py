@@ -28,11 +28,16 @@ class Query(graphene.ObjectType):
     )
 
     claim = graphene.Field(
-        ClaimGQLType, id=graphene.Int(), uuid=graphene.UUID())
+        ClaimGQLType, id=graphene.Int(), uuid=graphene.UUID()
+    )
 
-    claim_attachments = DjangoFilterConnectionField(ClaimAttachmentGQLType)
+    claim_attachments = DjangoFilterConnectionField(
+        ClaimAttachmentGQLType
+    )
     claim_admins = DjangoFilterConnectionField(
-        ClaimAdminGQLType, search=graphene.String()
+        ClaimAdminGQLType,
+        search=graphene.String(),
+        user_health_facility=graphene.String()
     )
     claim_officers = DjangoFilterConnectionField(
         OfficerGQLType, search=graphene.String()
@@ -112,21 +117,26 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
-    def resolve_claim_admins(self, info, search=None, hf=None, **kwargs):
+    def resolve_claim_admins(
+            self,
+            info,
+            search=None,
+            user_health_facility=None,
+            **kwargs
+    ):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_admins_perms):
             raise PermissionDenied(_("unauthorized"))
 
-        queryset = ClaimAdmin.object.filter().all()
-        print(**kwargs)
-        print(ClaimAdmin.object.all())
-
-
+        queryset = ClaimAdmin.objects
+        if user_health_facility is not None:
+            queryset = queryset.filter(health_facility=user_health_facility)
         if search is not None:
-            return ClaimAdmin.objects.filter(
+            queryset = queryset.filter(
                 Q(code__icontains=search)
                 | Q(last_name__icontains=search)
                 | Q(other_names__icontains=search)
             )
+        return queryset
 
     def resolve_claim_officers(self, info, search=None, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
