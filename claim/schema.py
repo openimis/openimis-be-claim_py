@@ -127,10 +127,10 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_admins_perms):
             raise PermissionDenied(_("unauthorized"))
 
-        queryset = ClaimAdmin.objects
-        if user_health_facility is not None:
-            queryset = queryset.filter(health_facility=user_health_facility)
-        if search is not None:
+        queryset = ClaimAdmin.objects.all()
+        if user_health_facility:
+            queryset = queryset.filter(health_facility__uuid=user_health_facility)
+        if search:
             queryset = queryset.filter(
                 Q(code__icontains=search)
                 | Q(last_name__icontains=search)
