@@ -20,9 +20,11 @@ from django.utils.translation import gettext as _
 from graphene import InputObjectType
 from location.schema import UserDistrict
 
-from .gql_queries import ClaimGQLType
-from .models import Claim, Feedback, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, ClaimDedRem
+from claim.gql_queries import ClaimGQLType
+from claim.models import Claim, Feedback, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, ClaimDedRem
 from product.models import ProductItemOrService
+
+from claim.utils import process_items_relations, process_services_relations
 
 logger = logging.getLogger(__name__)
 
@@ -236,40 +238,6 @@ def reset_claim_before_update(claim):
     claim.json_ext = None
 
 
-def process_child_relation(user, data_children,
-                           claim_id, children, create_hook):
-    claimed = 0
-    from core.utils import TimeUtils
-    for data_elt in data_children:
-        claimed += data_elt['qty_provided'] * data_elt['price_asked']
-        elt_id = data_elt.pop('id') if 'id' in data_elt else None
-        if elt_id:
-            # elt has been historized along with claim historization
-            elt = children.get(id=elt_id)
-            [setattr(elt, k, v) for k, v in data_elt.items()]
-            elt.validity_from = TimeUtils.now()
-            elt.audit_user_id = user.id_for_audit
-            elt.claim_id = claim_id
-            elt.save()
-        else:
-            data_elt['validity_from'] = TimeUtils.now()
-            data_elt['audit_user_id'] = user.id_for_audit
-            create_hook(claim_id, data_elt)
-
-    return claimed
-
-
-def item_create_hook(claim_id, item):
-    # TODO: investigate 'availability' is mandatory,
-    # but not in UI > always true?
-    item['availability'] = True
-    ClaimItem.objects.create(claim_id=claim_id, **item)
-
-
-def service_create_hook(claim_id, service):
-    ClaimService.objects.create(claim_id=claim_id, **service)
-
-
 def create_file(date, claim_id, document):
     date_iso = date.isoformat()
     root = ClaimConfig.claim_attachments_root_path
@@ -322,13 +290,13 @@ def update_or_create_claim(data, user):
         [setattr(claim, key, data[key]) for key in data]
     else:
         claim = Claim.objects.create(**data)
+    from core.utils import TimeUtils
     claimed = 0
-    claimed += process_child_relation(user, items,
-                                      claim.id, claim.items,
-                                      item_create_hook)
-    claimed += process_child_relation(user, services,
-                                      claim.id, claim.services,
-                                      service_create_hook)
+    claim.items.update(validity_to=TimeUtils.now())
+    claimed += process_items_relations(user, claim, items)
+    claim.services.update(validity_to=TimeUtils.now())
+    claimed += process_services_relations(user, claim, services)
+
     claim.claimed = claimed
     claim.save()
     return claim
@@ -575,7 +543,6 @@ class SubmitClaimsMutation(OpenIMISMutation):
             errors = errors[0]['list']
         logger.debug("SubmitClaimsMutation: claim done, errors: %s", len(errors))
         return errors
-
 
 
 def set_claims_status(uuids, field, status, audit_data=None):

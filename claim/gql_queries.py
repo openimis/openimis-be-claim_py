@@ -1,3 +1,4 @@
+import datetime
 import graphene
 from core import prefix_filterset, ExtendedConnection, filter_validity
 from graphene.utils.deduplicator import deflate
@@ -47,8 +48,25 @@ class ClaimGQLType(DjangoObjectType):
     The filters are possible on BatchRun, Insuree, HealthFacility, Admin and ICD in addition to the Claim fields
     themselves.
     """
+
     attachments_count = graphene.Int()
     client_mutation_id = graphene.String()
+    date_processed_to = graphene.Date()
+
+    def resolve_insuree(self, info):
+        if "insuree_loader" in info.context.dataloaders and self.insuree_id:
+            return info.context.dataloaders["insuree_loader"].load(self.insuree_id)
+        return self.insuree
+
+    def resolve_health_facility(self, info):
+        if (
+            "health_facility_loader" in info.context.dataloaders
+            and self.health_facility_id
+        ):
+            return info.context.dataloaders["health_facility_loader"].load(
+                self.health_facility_id
+            )
+        return self.health_facility
 
     class Meta:
         model = Claim
@@ -60,6 +78,7 @@ class ClaimGQLType(DjangoObjectType):
             "date_claimed": ["exact", "lt", "lte", "gt", "gte"],
             "date_from": ["exact", "lt", "lte", "gt", "gte"],
             "date_to": ["exact", "lt", "lte", "gt", "gte"],
+            "date_processed": ["exact", "lt", "lte", "gt", "gte"],
             "feedback_status": ["exact"],
             "review_status": ["exact"],
             "claimed": ["exact", "lt", "lte", "gt", "gte"],
@@ -75,13 +94,13 @@ class ClaimGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     def resolve_attachments_count(self, info):
-        return self.attachments.filter(validity_to__isnull=True).count()
+        return self.attachments.filter(legacy_id__isnull=True).count()
 
     def resolve_items(self, info):
-        return self.items.filter(validity_to__isnull=True)
+        return self.items.filter(legacy_id__isnull=True).filter(validity_to__isnull=True)
 
     def resolve_services(self, info):
-        return self.services.filter(validity_to__isnull=True)
+        return self.services.filter(legacy_id__isnull=True).filter(validity_to__isnull=True)
 
     def resolve_client_mutation_id(self, info):
         claim_mutation = self.mutations.select_related(
