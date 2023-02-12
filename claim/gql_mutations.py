@@ -21,7 +21,9 @@ from graphene import InputObjectType
 from location.schema import UserDistrict
 
 from claim.gql_queries import ClaimGQLType
-from claim.models import Claim, Feedback, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, ClaimDedRem
+from claim.models import Claim, Feedback, ClaimAttachment, ClaimDedRem
+from claim.models import ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem ,ClaimServiceService
+from medical.models import Item, Service
 from product.models import ProductItemOrService
 
 from claim.utils import process_items_relations, process_services_relations
@@ -64,6 +66,26 @@ class ClaimItemInputType(InputObjectType):
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
 
+class ClaimSubServiceInputType(InputObjectType):
+    id = graphene.Int(required=False)
+    subServiceCode = graphene.String(required=True)
+    qty_provided = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    qty_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+
+
+class ClaimSubItemInputType(InputObjectType):
+    id = graphene.Int(required=False)
+    subItemCode = graphene.String(required=True)
+    qty_provided = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    qty_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
 
 class ClaimServiceInputType(InputObjectType):
     id = graphene.Int(required=False)
@@ -103,6 +125,8 @@ class ClaimServiceInputType(InputObjectType):
     price_origin = graphene.String(max_length=1, required=False)
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
+    serviceLinked = graphene.List(ClaimSubItemInputType, required=False)
+    serviceserviceSet = graphene.List(ClaimSubServiceInputType, required=False)
 
 
 class FeedbackInputType(InputObjectType):
@@ -222,6 +246,7 @@ class ClaimInputType(OpenIMISMutation.Input):
     services = graphene.List(ClaimServiceInputType, required=False)
 
 
+
 class CreateClaimInputType(ClaimInputType):
     attachments = graphene.List(ClaimAttachmentInputType, required=False)
 
@@ -326,6 +351,8 @@ class CreateClaimMutation(OpenIMISMutation):
                 return [{
                     'message': _("claim.mutation.duplicated_claim_code") % {'code': data['code']},
                 }]
+            print("Async Mutate")
+            print(data)
             data['audit_user_id'] = user.id_for_audit
             data['status'] = Claim.STATUS_ENTERED
             from core.utils import TimeUtils
@@ -790,7 +817,38 @@ class SaveClaimReviewMutation(OpenIMISMutation):
             services = data.pop('services') if 'services' in data else []
             for service in services:
                 service_id = service.pop('id')
+                service.pop('serviceLinked', None)
+                service.pop('serviceserviceSet', None)
+                serviceLinked = service.serviceLinked
+                serviceserviceSet = service.serviceserviceSet
                 claim.services.filter(id=service_id).update(**service)
+                ClaimServiceId = ClaimService.objects.filter(claim=claim.id, service=service.service_id).first()
+                if(serviceLinked):
+                    for serviceL in serviceLinked:
+                        serviceL.pop('subItemCode', None)
+                        if serviceL.qty_asked.is_nan() :
+                            serviceL.qty_asked = 0
+                        itemId = Item.objects.filter(code=serviceL.subItemCode).first()
+                        claimServiceItemId = ClaimServiceItem.objects.filter(
+                            item=itemId,
+                            claimlinkedItem = ClaimServiceId
+                        ).first()
+                        claimServiceItemId.qty_displayed=serviceL.qty_asked
+                        claimServiceItemId.save()
+                
+                if(serviceserviceSet):
+                    for serviceserviceS in serviceserviceSet:
+                        serviceserviceS.pop('subItemCode', None)
+                        if serviceserviceS.qty_asked.is_nan() :
+                            serviceserviceS.qty_asked = 0
+                        serviceId = Service.objects.filter(code=serviceserviceS.subServiceCode).first()
+                        claimServiceServiceId = ClaimServiceService.objects.filter(
+                            service=serviceId,
+                            claimlinkedService = ClaimServiceId
+                        ).first()
+                        claimServiceServiceId.qty_displayed=serviceserviceS.qty_asked
+                        claimServiceServiceId.save()
+
                 if service['status'] == ClaimService.STATUS_PASSED:
                     all_rejected = False
             claim.approved = approved_amount(claim)
