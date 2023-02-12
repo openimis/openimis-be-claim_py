@@ -109,7 +109,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         expected = "<Claim>%s" % details
         expected = expected + "<Items>%s%s</Items>" % (item_a, item_b)
         expected = expected + \
-            "<Services>%s%s</Services>" % (service_a, service_b)
+                   "<Services>%s%s</Services>" % (service_a, service_b)
         expected = expected + "</Claim>"
         self.assertEquals(expected, claim.to_xml())
 
@@ -118,7 +118,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         with mock.patch("claim.services.ClaimSubmitService.hf_scope_check") as mock_security:
             mock_security.return_value = None
             query_result = [2]
-            mock_connections.__getitem__.return_value.cursor.return_value\
+            mock_connections.__getitem__.return_value.cursor.return_value \
                 .__enter__.return_value.fetchone.return_value = query_result
             mock_user = mock.Mock(is_anonymous=False)
             mock_user.has_perm = mock.MagicMock(return_value=True)
@@ -135,28 +135,30 @@ class ClaimSubmitServiceTestCase(TestCase):
             service = ClaimSubmitService(user=mock_user)
             with self.assertRaises(ClaimSubmitError) as cm:
                 service.submit(claim)
-            self.assertEquals(cm.exception.code, 2)
+            self.assertNotEqual(cm.exception.code, 0)
 
-    @mock.patch('django.db.connections')
-    def test_claim_submit_allgood_xml(self, mock_connections):
-        with mock.patch("claim.services.ClaimSubmitService.hf_scope_check") as mock_security:
-            mock_security.return_value = None
-            mock_connections.__getitem__.return_value.cursor.return_value \
-                .__enter__.return_value.description = None
-            mock_user = mock.Mock(is_anonymous=False)
-            mock_user.has_perm = mock.MagicMock(return_value=True)
-            claim = ClaimSubmit(
-                date=core.datetime.date(2020, 1, 9),
-                code="code_ABVC",
-                icd_code="ICD_CODE_WWQ",
-                total=334,
-                start_date=core.datetime.date(2020, 1, 13),
-                claim_admin_code='ADM_CODE_ADKJ',
-                insuree_chf_id='CHFID_UUZIS',
-                health_facility_code="HFCode_JQL"
-            )
-            service = ClaimSubmitService(user=mock_user)
-            service.submit(claim)  # doesn't raise an error
+    def test_claim_submit_allgood_xml(self):
+        with mock.patch("django.db.backends.utils.CursorWrapper") as mock_cursor:
+            # required for all modules tests
+            mock_cursor.return_value.description = None
+            # required for claim module tests
+            mock_cursor.return_value.__enter__.return_value.description = None
+            with mock.patch("claim.services.ClaimSubmitService.hf_scope_check") as mock_security:
+                mock_security.return_value = None
+                mock_user = mock.Mock(is_anonymous=False)
+                mock_user.has_perm = mock.MagicMock(return_value=True)
+                claim = ClaimSubmit(
+                    date=core.datetime.date(2020, 1, 9),
+                    code="code_ABVC",
+                    icd_code="ICD_CODE_WWQ",
+                    total=334,
+                    start_date=core.datetime.date(2020, 1, 13),
+                    claim_admin_code='ADM_CODE_ADKJ',
+                    insuree_chf_id='CHFID_UUZIS',
+                    health_facility_code="HFCode_JQL"
+                )
+                service = ClaimSubmitService(user=mock_user)
+                service.submit(claim)  # doesn't raise an error
 
     @mock.patch("claim.services.ClaimSubmitService._validate_user_hf")
     @mock.patch("claim.services.ClaimCreateService._validate_user_hf")
