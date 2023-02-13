@@ -1,4 +1,5 @@
 from core.models import Officer
+from .services import check_unique_claim_code
 import django
 from core.schema import signal_mutation_module_validate
 from django.db.models import OuterRef, Subquery, Avg, Q
@@ -42,6 +43,18 @@ class Query(graphene.ObjectType):
     claim_officers = DjangoFilterConnectionField(
         OfficerGQLType, search=graphene.String()
     )
+
+    validate_claim_code = graphene.Field(
+        graphene.Boolean,
+        claim_code=graphene.String(required=True),
+        description="Checks that the specified claim code is unique."
+    )
+
+    def resolve_validate_claim_code(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        errors = check_unique_claim_code(code=kwargs['claim_code'])
+        return False if errors else True
 
     def resolve_claim(self, info, id=None, uuid=None, **kwargs):
         if (
