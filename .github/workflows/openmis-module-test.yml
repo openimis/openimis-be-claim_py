@@ -11,10 +11,10 @@ on:
 
 jobs:
   run_test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     services:
       mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:2017-latest
         env:
           ACCEPT_EULA: Y
           SA_PASSWORD: GitHub999
@@ -33,7 +33,7 @@ jobs:
           git clone --depth 1 --branch develop https://github.com/openimis/database_ms_sqlserver.git  ./sql
           cd sql/ && bash concatenate_files.sh && cd ..
           curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-          curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
+          curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y  mssql-tools build-essential dialog apt-utils unixodbc-dev -y
           python -m pip install --upgrade pip
