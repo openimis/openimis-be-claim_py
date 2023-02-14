@@ -26,7 +26,7 @@ from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem
 from product.models import ProductItemOrService
 
 from claim.utils import process_items_relations, process_services_relations
-
+from .services import check_unique_claim_code
 logger = logging.getLogger(__name__)
 
 
@@ -275,6 +275,15 @@ def create_attachments(claim_id, attachments):
 def update_or_create_claim(data, user):
     items = data.pop('items') if 'items' in data else []
     services = data.pop('services') if 'services' in data else []
+    incoming_code = data.get('code')
+    current_claim = Claim.objects.filter(uuid=data['uuid']).first()
+    current_code = current_claim.code if current_claim else None
+    print(incoming_code, current_code)
+    if current_code != incoming_code:
+        if check_unique_claim_code(incoming_code):
+            raise ValidationError(
+                _("mutation.code_name_duplicated"))
+
     if "client_mutation_id" in data:
         data.pop('client_mutation_id')
     if "client_mutation_label" in data:
