@@ -377,5 +377,5 @@ class ClaimCreateService:
 
 def check_unique_claim_code(code):
     if Claim.objects.filter(code=code, validity_to__isnull=True).exists():
-        return [{"message": "Services pricelist name %s already exists" % code}]
+        return [{"message": "Claim code %s already exists" % code}]
     return []
