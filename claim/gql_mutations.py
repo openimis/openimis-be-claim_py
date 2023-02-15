@@ -276,9 +276,9 @@ def update_or_create_claim(data, user):
     items = data.pop('items') if 'items' in data else []
     services = data.pop('services') if 'services' in data else []
     incoming_code = data.get('code')
-    current_claim = Claim.objects.filter(uuid=data['uuid']).first()
+    claim_uuid = data.pop("uuid", None)
+    current_claim = Claim.objects.filter(uuid=claim_uuid).first()
     current_code = current_claim.code if current_claim else None
-    print(incoming_code, current_code)
     if current_code != incoming_code:
         if check_unique_claim_code(incoming_code):
             raise ValidationError(
