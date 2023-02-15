@@ -279,11 +279,9 @@ def update_or_create_claim(data, user):
     claim_uuid = data.pop("uuid", None)
     current_claim = Claim.objects.filter(uuid=claim_uuid).first()
     current_code = current_claim.code if current_claim else None
-    if current_code != incoming_code:
-        if check_unique_claim_code(incoming_code):
-            raise ValidationError(
-                _("mutation.code_name_duplicated"))
-
+    if current_code != incoming_code \
+            and check_unique_claim_code(incoming_code):
+        raise ValidationError(_("mutation.code_name_duplicated"))
     if "client_mutation_id" in data:
         data.pop('client_mutation_id')
     if "client_mutation_label" in data:
