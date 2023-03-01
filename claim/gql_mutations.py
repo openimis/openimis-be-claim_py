@@ -21,9 +21,10 @@ from graphene import InputObjectType
 from location.schema import UserDistrict
 
 from claim.gql_queries import ClaimGQLType
-from claim.models import Claim, Feedback, ClaimAttachment, ClaimDedRem
-from claim.models import ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem ,ClaimServiceService
+from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, \
+    ClaimDedRem, ClaimServiceItem ,ClaimServiceService
 from medical.models import Item, Service
+
 from product.models import ProductItemOrService
 
 from claim.utils import process_items_relations, process_services_relations
