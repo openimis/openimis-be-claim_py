@@ -359,8 +359,6 @@ class CreateClaimMutation(OpenIMISMutation):
                 return [{
                     'message': _("claim.mutation.duplicated_claim_code") % {'code': data['code']},
                 }]
-            print("Async Mutate")
-            print(data)
             data['audit_user_id'] = user.id_for_audit
             data['status'] = Claim.STATUS_ENTERED
             from core.utils import TimeUtils
