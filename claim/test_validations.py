@@ -26,6 +26,7 @@ class ValidationTest(TestCase):
     service_A_invalid = None
 
     def setUp(self) -> None:
+        super(ValidationTest, self).setUp()
         self.i_user = InteractiveUser(
             login_name="test_batch_run", audit_user_id=978911, id=97891
         )
@@ -38,15 +39,6 @@ class ValidationTest(TestCase):
         self.service_A_invalid = create_test_service("A", False)
 
         self.item_1 = create_test_item("D")
-
-    def tearDown(self) -> None:
-        self.service_H.delete()
-        self.service_O.delete()
-        self.service_D.delete()
-        self.service_A.delete()
-        self.service_A_invalid.delete()
-
-        self.item_1.delete()
 
     def test_get_claim_category_S(self):
         # Given
@@ -427,7 +419,8 @@ class ValidationTest(TestCase):
         claim2 = create_test_claim({"insuree_id": insuree.id})
         service2 = create_test_claimservice(claim2, custom_props={"service_id": service.id})
         errors = validate_claim(claim2, True)
-        self.assertGreater(len(errors), 0, "The second service should fail because there is already one hospitalization")
+        self.assertGreater(len(errors), 0,
+                           "The second service should fail because there is already one hospitalization")
 
         # Then
         claim1.refresh_from_db()
@@ -947,7 +940,6 @@ class ValidationTest(TestCase):
         service.delete()
         item.delete()
         product.delete()
-
 
     def test_review_reject_delete_dedrem(self):
         """
