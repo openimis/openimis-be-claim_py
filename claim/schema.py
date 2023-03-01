@@ -6,7 +6,6 @@ import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
 from core import filter_validity
 from django.db.models.functions import Cast
-from jsonfallback.fields import FallbackJSONField
 
 from .models import ClaimMutation
 from django.utils.translation import gettext as _
