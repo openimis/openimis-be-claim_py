@@ -1142,11 +1142,22 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         itemsvcs_pricelist__validity_to__isnull=True,
                         validity_to__isnull=True) \
                 .first()
-            product_itemsvc = (ProductItem if detail_is_item else ProductService).objects \
-                .filter(product=claim_detail.product,
-                        itemsvc=claim_detail.itemsvc,
-                        validity_to__isnull=True) \
-                .first()
+            product_itemsvc = None
+            
+            if detail_is_item:
+                 product_itemsvc = ProductItem.objects.filter(
+                     product_id=claim_detail.product_id,
+                     item_id=claim_detail.item_id,
+                     validity_to__isnull=True
+                 ).first()
+            else:
+               product_itemsvc = ProductService.objects.filter(
+                     product=claim_detail.product,
+                     service_id=claim_detail.service_id,
+                     validity_to__isnull=True
+                 ).first()
+            if product_itemsvc is None:
+                raise ValueError("Product Item not found")
 
             pl_price = itemsvc_pricelist_detail.price_overrule if itemsvc_pricelist_detail.price_overrule \
                 else claim_detail.itemsvc.price
@@ -1254,7 +1265,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                             remunerated_consultation += work_value
 
             # TODO big rework of this condition is needed. putting the ceiling_exclusion_? into a variable as first step
-            if (claim.insuree.is_adult
+            if (product_itemsvc is not None and claim.insuree.is_adult
                 and (
                         (
                                 product.ceiling_interpretation == Product.CEILING_INTERPRETATION_IN_PATIENT and hospitalization == 1)
