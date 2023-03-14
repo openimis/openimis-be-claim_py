@@ -1146,18 +1146,20 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
             
             if detail_is_item:
                  product_itemsvc = ProductItem.objects.filter(
-                     product_id=claim_detail.product_id,
-                     item_id=claim_detail.item_id,
-                     validity_to__isnull=True
+                    product_id=claim_detail.product_id,
+                    item_id=claim_detail.item_id,
+                    validity_to__isnull=True
                  ).first()
+                 if product_itemsvc is None:
+                    raise ValueError("Product Item not found")
             else:
-               product_itemsvc = ProductService.objects.filter(
-                     product=claim_detail.product,
-                     service_id=claim_detail.service_id,
-                     validity_to__isnull=True
-                 ).first()
-            if product_itemsvc is None:
-                raise ValueError("Product Item not found")
+                product_itemsvc = ProductService.objects.filter(
+                    product=claim_detail.product,
+                    service_id=claim_detail.service_id,
+                    validity_to__isnull=True
+                ).first()
+                if product_itemsvc is None:
+                    raise ValueError("Product Service not found")
 
             pl_price = itemsvc_pricelist_detail.price_overrule if itemsvc_pricelist_detail.price_overrule \
                 else claim_detail.itemsvc.price
