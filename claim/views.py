@@ -4,6 +4,7 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes
 
+from core.jwt_authentication import JWTAuthentication
 from report.services import ReportService
 from tools.views import checkUserWithRights
 from .services import ClaimReportService
@@ -14,6 +15,7 @@ from django.utils.translation import gettext as _
 import core
 
 
+@api_view(['GET'])
 def print(request):
     if not request.user.has_perms(ClaimConfig.claim_print_perms):
         raise PermissionDenied(_("unauthorized"))
