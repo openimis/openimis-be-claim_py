@@ -4,7 +4,6 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes
 
-from core.jwt_authentication import JWTAuthentication
 from report.services import ReportService
 from tools.views import checkUserWithRights
 from .services import ClaimReportService
