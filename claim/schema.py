@@ -1,3 +1,5 @@
+import graphene
+
 from core.models import Officer
 from .services import check_unique_claim_code
 import django
@@ -39,7 +41,8 @@ class Query(graphene.ObjectType):
     claim_admins = DjangoFilterConnectionField(
         ClaimAdminGQLType,
         search=graphene.String(),
-        user_health_facility=graphene.String()
+        user_health_facility=graphene.String(),
+        only_valid_hf=graphene.Boolean()
     )
     claim_officers = DjangoFilterConnectionField(
         OfficerGQLType, search=graphene.String()
@@ -141,8 +144,11 @@ class Query(graphene.ObjectType):
                 ClaimConfig.gql_query_claim_admins_perms
         ):
             raise PermissionDenied(_("unauthorized"))
-        queryset = ClaimAdmin.objects.all()
+        queryset = ClaimAdmin.objects.filter(validity_to__isnull=True)
         user_health_facility = kwargs.get("user_health_facility", None)
+        only_valid_hf = kwargs.get("only_valid_hf", None)
+        if only_valid_hf:
+            queryset = queryset.filter(health_facility__validity_to__isnull=True)
         if user_health_facility:
             user_health_facility = ast.literal_eval(user_health_facility)
             queryset = queryset.filter(
