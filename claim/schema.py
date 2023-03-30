@@ -141,20 +141,21 @@ class Query(graphene.ObjectType):
                 ClaimConfig.gql_query_claim_admins_perms
         ):
             raise PermissionDenied(_("unauthorized"))
-        queryset = ClaimAdmin.objects.all()
+        filters = [*filter_validity(**kwargs)]
         user_health_facility = kwargs.get("user_health_facility", None)
         if user_health_facility:
             user_health_facility = ast.literal_eval(user_health_facility)
-            queryset = queryset.filter(
-                health_facility__uuid__in=user_health_facility
-            )
+            filters += [Q(health_facility__uuid__in=user_health_facility)]
+
+        else:
+            filters += [Q(health_facility__validity_to__isnull=True) &
+                        Q(health_facility__legacy_id__isnull=True)]
         if search:
-            queryset = queryset.filter(
-                Q(code__icontains=search)
-                | Q(last_name__icontains=search)
-                | Q(other_names__icontains=search)
-            )
-        return queryset
+            filters += filters[Q(code__icontains=search) |
+                               Q(last_name__icontains=search) |
+                               Q(other_names__icontains=search)]
+
+        return ClaimAdmin.objects.filter(*filters)
 
     def resolve_claim_officers(self, info, search=None, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
