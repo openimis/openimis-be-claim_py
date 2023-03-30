@@ -1,4 +1,5 @@
 from core.models import Officer
+from location.models import HealthFacility
 from .services import check_unique_claim_code
 import django
 from core.schema import signal_mutation_module_validate
@@ -39,7 +40,8 @@ class Query(graphene.ObjectType):
     claim_admins = DjangoFilterConnectionField(
         ClaimAdminGQLType,
         search=graphene.String(),
-        user_health_facility=graphene.String()
+        region_uuid=graphene.String(),
+        district_uuid=graphene.String()
     )
     claim_officers = DjangoFilterConnectionField(
         OfficerGQLType, search=graphene.String()
@@ -141,15 +143,23 @@ class Query(graphene.ObjectType):
                 ClaimConfig.gql_query_claim_admins_perms
         ):
             raise PermissionDenied(_("unauthorized"))
-        filters = [*filter_validity(**kwargs)]
-        user_health_facility = kwargs.get("user_health_facility", None)
-        if user_health_facility:
-            user_health_facility = ast.literal_eval(user_health_facility)
-            filters += [Q(health_facility__uuid__in=user_health_facility)]
 
-        else:
-            filters += [Q(health_facility__validity_to__isnull=True) &
-                        Q(health_facility__legacy_id__isnull=True)]
+        hf_filters = [*filter_validity(**kwargs)]
+        district_uuid = kwargs.get('district_uuid', None)
+        region_uuid = kwargs.get('region_uuid', None)
+        if district_uuid is not None:
+            hf_filters += [Q(location__uuid=district_uuid)]
+        if region_uuid is not None:
+            hf_filters += [Q(location__parent__uuid=region_uuid)]
+        if settings.ROW_SECURITY:
+            dist = UserDistrict.get_user_districts(info.context.user._u)
+            hf_filters += [Q(location__id__in=[l.location_id for l in dist])]
+        user_health_facility = HealthFacility.objects.filter(*hf_filters)
+
+        filters = [*filter_validity(**kwargs)]
+        if user_health_facility:
+            filters += [Q(health_facility__in=user_health_facility)]
+
         if search:
             filters += filters[Q(code__icontains=search) |
                                Q(last_name__icontains=search) |
