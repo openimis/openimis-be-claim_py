@@ -286,7 +286,6 @@ def update_or_create_claim(data, user):
         data.pop('client_mutation_id')
     if "client_mutation_label" in data:
         data.pop('client_mutation_label')
-    claim_uuid = data.pop('uuid') if 'uuid' in data else None
     # update_or_create(uuid=claim_uuid, ...)
     # doesn't work because of explicit attempt to set null to uuid!
     if claim_uuid:
@@ -369,6 +368,7 @@ class UpdateClaimMutation(OpenIMISMutation):
             if not user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
                 raise PermissionDenied(_("unauthorized"))
             data['audit_user_id'] = user.id_for_audit
+            data['status'] = Claim.STATUS_ENTERED
             update_or_create_claim(data, user)
             return None
         except Exception as exc:
