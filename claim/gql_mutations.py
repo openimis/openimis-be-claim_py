@@ -368,7 +368,6 @@ class UpdateClaimMutation(OpenIMISMutation):
             if not user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
                 raise PermissionDenied(_("unauthorized"))
             data['audit_user_id'] = user.id_for_audit
-            data['status'] = Claim.STATUS_ENTERED
             update_or_create_claim(data, user)
             return None
         except Exception as exc:
