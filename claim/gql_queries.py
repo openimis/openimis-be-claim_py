@@ -81,7 +81,7 @@ class ClaimGQLType(DjangoObjectType):
         filter_fields = {
             "uuid": ["exact"],
             "code": ["exact", "istartswith", "icontains", "iexact"],
-            "status": ["exact"],
+            "status": ["exact", "gt"],
             "date_claimed": ["exact", "lt", "lte", "gt", "gte"],
             "date_from": ["exact", "lt", "lte", "gt", "gte"],
             "date_to": ["exact", "lt", "lte", "gt", "gte"],
