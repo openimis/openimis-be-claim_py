@@ -714,6 +714,7 @@ def get_claim_category(claim):
         Service.CATEGORY_OTHER,
         Service.CATEGORY_VISIT,
     ]
+    target_date = claim.date_to if claim.date_to else claim.date_from
     services = claim.services \
         .filter(validity_to__isnull=True, service__validity_to__isnull=True) \
         .values("service__category").distinct()
@@ -721,6 +722,8 @@ def get_claim_category(claim):
         service["service__category"]
         for service in services
     ]
+    if claim.date_from != target_date:
+        claim_service_categories.append(Service.CATEGORY_HOSPITALIZATION)
     for category in service_categories:
         if category in claim_service_categories:
             claim_category = category
