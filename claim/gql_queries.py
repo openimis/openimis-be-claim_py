@@ -103,7 +103,7 @@ class ClaimGQLType(DjangoObjectType):
     def resolve_attachments_count(self, info):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
-        return self.attachments.filter(legacy_id__isnull=True).count()
+        return self.attachments.filter(legacy_id__isnull=True).filter(validity_to__isnull=True).count()
 
     def resolve_items(self, info):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
