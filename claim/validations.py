@@ -54,7 +54,7 @@ def validate_claim(claim, check_max):
     errors += validate_target_date(claim)
     if len(errors) == 0:
         errors += validate_family(claim, claim.insuree)
-    if len(errors) == 0:
+    if len(errors) == 0 and check_max:
         detail_errors += validate_claimitems(claim)
         detail_errors += validate_claimservices(claim)
 
