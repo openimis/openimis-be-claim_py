@@ -1,5 +1,6 @@
-from claim.reports import claim_percentage_referrals
+from claim.reports import claim_percentage_referrals, claims_overview
 from claim.reports.claim_percentage_referrals import claim_percentage_referrals_query
+from claim.reports.claims_overview import claims_overview_query
 
 report_definitions = [
     {
@@ -10,5 +11,14 @@ report_definitions = [
         "module": "claim",
         "python_query": claim_percentage_referrals_query,
         "permission": ["131214"],
+    },
+    {
+        "name": "claims_overview",
+        "engine": 0,
+        "default_report": claims_overview.template,
+        "description": "Overview of the processing of claims",
+        "module": "claim",
+        "python_query": claims_overview_query,
+        "permission": ["131213"],
     },
 ]
