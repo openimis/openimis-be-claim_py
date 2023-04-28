@@ -994,9 +994,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
     ).values("policy_id", "product_id")
     if items_query.count() == 0 and services_query.count() == 0:
         logger.warning(f"claim {claim.uuid} did not have any item or service to valuate.")
-    items_services_union_list = list(items_query.union(services_query, all=True))
-    items_services_union_no_duplicates = [dict(t) for t in {tuple(d.items()) for d in items_services_union_list}]
-    for policy_product in items_services_union_no_duplicates:
+    for policy_product in items_query.union(services_query, all=True):
         product = Product.objects.get(id=policy_product["product_id"])
         policy_members = InsureePolicy.objects.filter(
             policy_id=policy_product["policy_id"],
