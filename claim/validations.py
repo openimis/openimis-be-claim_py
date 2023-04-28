@@ -994,7 +994,9 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
     ).values("policy_id", "product_id")
     if items_query.count() == 0 and services_query.count() == 0:
         logger.warning(f"claim {claim.uuid} did not have any item or service to valuate.")
-    for policy_product in items_query.union(services_query, all=True):
+    items_services_union_list = list(items_query.union(services_query, all=True))
+    items_services_union_no_duplicates = [dict(t) for t in {tuple(d.items()) for d in items_services_union_list}]
+    for policy_product in items_services_union_no_duplicates:
         product = Product.objects.get(id=policy_product["product_id"])
         policy_members = InsureePolicy.objects.filter(
             policy_id=policy_product["policy_id"],
@@ -1084,7 +1086,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         if product.max_policy_extra_member_ip:
                             ceiling = Deductible(
                                 product.max_ip_policy + (
-                                            policy_members - product.threshold) * product.max_policy_extra_member_ip,
+                                        policy_members - product.threshold) * product.max_policy_extra_member_ip,
                                 ceiling.type,
                                 ceiling.prev
                             )
@@ -1110,7 +1112,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         if product.max_policy_extra_member_op:
                             ceiling = Deductible(
                                 product.max_op_policy + (
-                                            policy_members - product.threshold) * product.max_policy_extra_member_op,
+                                        policy_members - product.threshold) * product.max_policy_extra_member_op,
                                 ceiling.type,
                                 ceiling.prev
                             )
@@ -1152,14 +1154,14 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         validity_to__isnull=True) \
                 .first()
             product_itemsvc = None
-            
+
             if detail_is_item:
-                 product_itemsvc = ProductItem.objects.filter(
+                product_itemsvc = ProductItem.objects.filter(
                     product_id=claim_detail.product_id,
                     item_id=claim_detail.item_id,
                     validity_to__isnull=True
-                 ).first()
-                 if product_itemsvc is None:
+                ).first()
+                if product_itemsvc is None:
                     raise ValueError("Product Item not found")
             else:
                 product_itemsvc = ProductService.objects.filter(
@@ -1326,7 +1328,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                             set_price_remunerated = work_value
                             remunerated += work_value
                         else:
-                            total = ceiling.amount + prev_remunerated + remunerated
+                            total = ceiling.amount - prev_remunerated - remunerated
                             exceed_ceiling_amount = work_value - total
                             set_price_valuated = total
                             set_price_remunerated = total
