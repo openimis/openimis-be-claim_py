@@ -469,21 +469,10 @@ def check_service_item_max_provision(adult, product_service_item, service_or_ite
         limit_no = product_service_item.limit_no_child
     if limit_no is not None and limit_no >= 0:
         # count qty provided
-        total_qty_provided = claim_service_item.__class__.objects \
-            .annotate(target_date=Coalesce("claim__date_to", "claim__date_from")) \
-            .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True),
-                    validity_to__isnull=True,
-                    **{f"{'service' if isinstance(service_or_item, Service) else 'item'}_id": service_or_item.id},
-                    policy__validity_to__isnull=True,
-                    target_date__gte=insuree_policy_effective_date,
-                    target_date__lte=expiry_date,
-                    claim__insuree_id=insuree_id,
-                    claim__status__gt=Claim.STATUS_ENTERED,
-                    claim__validity_to__isnull=True
-                    ) \
-            .aggregate(total_qty_provided=Sum(Coalesce("qty_approved", "qty_provided")))\
-            .get("total_qty_provided") or 0
-        qty = total_qty_provided + claim_service_item.qty_provided if claim_service_item.qty_approved is None else claim_service_item.qty_approved
+        total_qty_provided = _get_total_qty_provided(claim_service_item, service_or_item, insuree_policy_effective_date,
+                                                     expiry_date, insuree_id)
+        qty = total_qty_provided + claim_service_item.qty_provided if claim_service_item.qty_approved is None \
+                                                                   else claim_service_item.qty_approved
         if qty > limit_no:
             # it would be good to add a warning msg, here is a related ticket: OTC-943
             if total_qty_provided < limit_no:
@@ -505,6 +494,24 @@ def check_service_item_max_provision(adult, product_service_item, service_or_ite
 
     return errors
 
+
+def _get_total_qty_provided(claim_service_item, service_or_item, insuree_policy_effective_date,
+                            expiry_date, insuree_id):
+    return claim_service_item.__class__.objects \
+            .annotate(target_date=Coalesce("claim__date_to", "claim__date_from")) \
+            .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True),
+                    validity_to__isnull=True,
+                    **{
+                        f"{'service' if isinstance(service_or_item, Service) else 'item'}_id": service_or_item.id},
+                    policy__validity_to__isnull=True,
+                    target_date__gte=insuree_policy_effective_date,
+                    target_date__lte=expiry_date,
+                    claim__insuree_id=insuree_id,
+                    claim__status__gt=Claim.STATUS_ENTERED,
+                    claim__validity_to__isnull=True
+                    ) \
+            .aggregate(total_qty_provided=Sum(Coalesce("qty_approved", "qty_provided"))) \
+            .get("total_qty_provided") or 0
 
 def check_claim_max_no_category(base_category, product, expiry_date, insuree_id,
                                 insuree_policy_effective_date, claim, claimservice):
