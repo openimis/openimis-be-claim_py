@@ -467,14 +467,13 @@ def check_service_item_max_provision(adult, product_service_item, service_or_ite
         limit_no = product_service_item.limit_no_adult
     else:
         limit_no = product_service_item.limit_no_child
-    service_or_item_str = 'service' if isinstance(service_or_item, Service) else 'item'
     if limit_no is not None and limit_no >= 0:
         # count qty provided
         total_qty_provided = claim_service_item.__class__.objects \
             .annotate(target_date=Coalesce("claim__date_to", "claim__date_from")) \
             .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True),
                     validity_to__isnull=True,
-                    **{f"{service_or_item_str}_id": service_or_item.id},
+                    **{f"{'service' if isinstance(service_or_item, Service) else 'item'}_id": service_or_item.id},
                     policy__validity_to__isnull=True,
                     target_date__gte=insuree_policy_effective_date,
                     target_date__lte=expiry_date,
