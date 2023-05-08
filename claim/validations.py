@@ -204,6 +204,7 @@ def validate_claimservice_validity(claim, claimservice):
                     'detail': claim.uuid}]
     return errors
 
+
 def validate_claimitem_in_price_list(claim, claimitem):
     errors = []
     pricelist_detail = ItemsPricelistDetail.objects \
@@ -379,8 +380,9 @@ def validate_item_product_family(claimitem, target_date, item, insuree_id, adult
             expiry_date = core.datetime.date.from_ad_date(expiry_date)
             product_item = ProductItem.objects.get(pk=product_item_id)
             # START CHECK 17 --> Item/Service waiting period violation (17)
-            errors = check_service_item_waiting_period(policy_stage, policy_effective_date, insuree_policy_effective_date,
-                                                        item, adult, product_item, target_date, claimitem)
+            errors = check_service_item_waiting_period(policy_stage, policy_effective_date,
+                                                       insuree_policy_effective_date,
+                                                       item, adult, product_item, target_date, claimitem)
 
             # **** START CHECK 16 --> Item/Service Maximum provision (16)*****
             errors += check_service_item_max_provision(adult, product_item, item, insuree_policy_effective_date,
@@ -457,20 +459,22 @@ def check_service_item_waiting_period(policy_stage, policy_effective_date, insur
                     'detail': claim_service_item.claim.uuid}]
     return errors
 
+
 def check_service_item_max_provision(adult, product_service_item, service_or_item, insuree_policy_effective_date,
-                                expiry_date, insuree_id, claim_service_item):
+                                     expiry_date, insuree_id, claim_service_item):
     errors = []
     if adult:
         limit_no = product_service_item.limit_no_adult
     else:
         limit_no = product_service_item.limit_no_child
+    service_or_item_str = 'service' if isinstance(service_or_item, Service) else 'item'
     if limit_no is not None and limit_no >= 0:
         # count qty provided
-        total_qty_provided = ClaimService.objects \
+        total_qty_provided = claim_service_item.__class__.objects \
             .annotate(target_date=Coalesce("claim__date_to", "claim__date_from")) \
             .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True),
                     validity_to__isnull=True,
-                    service_id=service_or_item.id,
+                    **{f"{service_or_item_str}_id": service_or_item.id},
                     policy__validity_to__isnull=True,
                     target_date__gte=insuree_policy_effective_date,
                     target_date__lte=expiry_date,
@@ -492,8 +496,9 @@ def check_service_item_max_provision(adult, product_service_item, service_or_ite
                         'detail': claim_service_item.claim.uuid}]
     return errors
 
+
 def check_claim_max_no_category(base_category, product, expiry_date, insuree_id,
-                          insuree_policy_effective_date, claim, claimservice):
+                                insuree_policy_effective_date, claim, claimservice):
     errors = []
     category_dict = {
         'C': {'max': product.max_no_consultation,
