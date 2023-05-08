@@ -482,18 +482,28 @@ def check_service_item_max_provision(adult, product_service_item, service_or_ite
                     claim__status__gt=Claim.STATUS_ENTERED,
                     claim__validity_to__isnull=True
                     ) \
-            .aggregate(Sum("qty_provided"))
-        qty = total_qty_provided["qty_provided__sum"] or 0
-        qty += claim_service_item.qty_provided if claim_service_item.qty_approved is None else claim_service_item.qty_approved
+            .aggregate(total_qty_provided=Sum(Coalesce("qty_approved", "qty_provided")))\
+            .get("total_qty_provided", 0)
+        qty = total_qty_provided + claim_service_item.qty_provided if claim_service_item.qty_approved is None else claim_service_item.qty_approved
         if qty > limit_no:
-            claim_service_item.rejection_reason = REJECTION_REASON_QTY_OVER_LIMIT
-            errors += [{'code': REJECTION_REASON_QTY_OVER_LIMIT,
-                        'message': _("claim.validation.product_family.max_nb_allowed") % {
-                            'code': claim_service_item.claim.code,
-                            'element': str(service_or_item),
-                            'provided': total_qty_provided,
-                            'max': limit_no},
-                        'detail': claim_service_item.claim.uuid}]
+            # it would be good to add a warning msg, here is a related ticket: OTC-943
+            if total_qty_provided < limit_no:
+                remaining_qty = limit_no - total_qty_provided
+                if claim_service_item.qty_approved is None:
+                    claim_service_item.qty_provided = remaining_qty
+                else:
+                    claim_service_item.qty_approved = remaining_qty
+                claim_service_item.save()
+            else:
+                claim_service_item.rejection_reason = REJECTION_REASON_QTY_OVER_LIMIT
+                errors += [{'code': REJECTION_REASON_QTY_OVER_LIMIT,
+                            'message': _("claim.validation.product_family.max_nb_allowed") % {
+                                'code': claim_service_item.claim.code,
+                                'element': str(service_or_item),
+                                'provided': total_qty_provided,
+                                'max': limit_no},
+                            'detail': claim_service_item.claim.uuid}]
+
     return errors
 
 
