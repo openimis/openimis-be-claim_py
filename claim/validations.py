@@ -483,7 +483,7 @@ def check_service_item_max_provision(adult, product_service_item, service_or_ite
                     claim__validity_to__isnull=True
                     ) \
             .aggregate(total_qty_provided=Sum(Coalesce("qty_approved", "qty_provided")))\
-            .get("total_qty_provided", 0)
+            .get("total_qty_provided") or 0
         qty = total_qty_provided + claim_service_item.qty_provided if claim_service_item.qty_approved is None else claim_service_item.qty_approved
         if qty > limit_no:
             # it would be good to add a warning msg, here is a related ticket: OTC-943
