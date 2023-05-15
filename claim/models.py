@@ -96,7 +96,7 @@ class ClaimAdmin(core_models.VersionedModel):
         return location_models.Location.objects.filter(uuid__in=all_allowed_uuids)
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimAdmin'
 
 
@@ -116,7 +116,7 @@ class Feedback(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblFeedback'
 
     @classmethod
@@ -149,7 +149,7 @@ class FeedbackPrompt(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID', blank=True, null=True)
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblFeedbackPrompt'
 
     @classmethod
@@ -273,7 +273,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     # row_id = models.BinaryField(db_column='RowID', blank=True, null=True)
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaim'
 
     STATUS_REJECTED = 1
@@ -345,7 +345,7 @@ class ClaimAttachmentsCount(models.Model):
     value = models.IntegerField(db_column='attachments_count')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'claim_ClaimAttachmentsCountView'
 
 
@@ -446,7 +446,7 @@ class ClaimItem(core_models.VersionedModel, ClaimDetail, core_models.ExtendableM
     objects = ClaimDetailManager()
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimItems'
 
 
@@ -525,7 +525,7 @@ class ClaimService(core_models.VersionedModel, ClaimDetail, core_models.Extendab
     objects = ClaimDetailManager()
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimServices'
 
 
@@ -555,5 +555,5 @@ class ClaimDedRem(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimDedRem'
