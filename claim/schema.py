@@ -1,4 +1,6 @@
 from core.models import Officer
+from location.models import HealthFacility
+from .services import check_unique_claim_code
 import django
 from core.schema import signal_mutation_module_validate
 from django.db.models import OuterRef, Subquery, Avg, Q
@@ -10,6 +12,7 @@ from django.db.models.functions import Cast
 from .models import ClaimMutation
 from django.utils.translation import gettext as _
 from graphene_django.filter import DjangoFilterConnectionField
+import ast
 
 # We do need all queries and mutations in the namespace here.
 from .gql_queries import *  # lgtm [py/polluting-import]
@@ -27,15 +30,34 @@ class Query(graphene.ObjectType):
         json_ext=graphene.JSONString(),
     )
 
-    claim = graphene.Field(ClaimGQLType, id=graphene.Int(), uuid=graphene.UUID())
+    claim = graphene.Field(
+        ClaimGQLType, id=graphene.Int(), uuid=graphene.UUID()
+    )
 
-    claim_attachments = DjangoFilterConnectionField(ClaimAttachmentGQLType)
+    claim_attachments = DjangoFilterConnectionField(
+        ClaimAttachmentGQLType
+    )
     claim_admins = DjangoFilterConnectionField(
-        ClaimAdminGQLType, search=graphene.String()
+        ClaimAdminGQLType,
+        search=graphene.String(),
+        region_uuid=graphene.String(),
+        district_uuid=graphene.String()
     )
     claim_officers = DjangoFilterConnectionField(
         OfficerGQLType, search=graphene.String()
     )
+
+    validate_claim_code = graphene.Field(
+        graphene.Boolean,
+        claim_code=graphene.String(required=True),
+        description="Checks that the specified claim code is unique."
+    )
+
+    def resolve_validate_claim_code(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        errors = check_unique_claim_code(code=kwargs['claim_code'])
+        return False if errors else True
 
     def resolve_claim(self, info, id=None, uuid=None, **kwargs):
         if (
@@ -87,7 +109,8 @@ class Query(graphene.ObjectType):
                 .annotate(diag_avg=Avg("approved"))
                 .values("diag_avg")
             )
-            variance_filter = Q(claimed__gt=(1 + variance / 100) * Subquery(diag_avg))
+            variance_filter = Q(claimed__gt=(
+                1 + variance / 100) * Subquery(diag_avg))
             if not ClaimConfig.gql_query_claim_diagnosis_variance_only_on_existing:
                 diags = (
                     Claim.objects.filter(*filter_validity(**kwargs))
@@ -97,22 +120,52 @@ class Query(graphene.ObjectType):
                 )
                 variance_filter = variance_filter | ~Q(icd__code__in=diags)
             query = query.filter(variance_filter)
+
+        from location.models import Location
+        user_districts = UserDistrict.get_user_districts(info.context.user._u)
+        query = query.filter(
+            Q(health_facility__location__in=Location.objects.filter(uuid__in=user_districts.values_list('location__uuid', flat=True))) | Q(
+                health_facility__location__in=Location.objects.filter(uuid__in=user_districts.values_list('location__parent__uuid', flat=True))))
+
         return gql_optimizer.query(query.all(), info)
 
     def resolve_claim_attachments(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
-    def resolve_claim_admins(self, info, search=None, **kwargs):
-        if not info.context.user.has_perms(ClaimConfig.gql_query_claim_admins_perms):
+    def resolve_claim_admins(
+            self,
+            info,
+            search=None,
+            **kwargs
+    ):
+        if not info.context.user.has_perms(
+                ClaimConfig.gql_query_claim_admins_perms
+        ):
             raise PermissionDenied(_("unauthorized"))
 
-        if search is not None:
-            return ClaimAdmin.objects.filter(
-                Q(code__icontains=search)
-                | Q(last_name__icontains=search)
-                | Q(other_names__icontains=search)
-            )
+        hf_filters = [*filter_validity(**kwargs)]
+        district_uuid = kwargs.get('district_uuid', None)
+        region_uuid = kwargs.get('region_uuid', None)
+        if district_uuid is not None:
+            hf_filters += [Q(location__uuid=district_uuid)]
+        if region_uuid is not None:
+            hf_filters += [Q(location__parent__uuid=region_uuid)]
+        if settings.ROW_SECURITY:
+            dist = UserDistrict.get_user_districts(info.context.user._u)
+            hf_filters += [Q(location__id__in=[l.location_id for l in dist])]
+        user_health_facility = HealthFacility.objects.filter(*hf_filters)
+
+        filters = [*filter_validity(**kwargs)]
+        if user_health_facility:
+            filters += [Q(health_facility__in=user_health_facility)]
+
+        if search:
+            filters += [Q(code__icontains=search) |
+                        Q(last_name__icontains=search) |
+                        Q(other_names__icontains=search)]
+
+        return ClaimAdmin.objects.filter(*filters)
 
     def resolve_claim_officers(self, info, search=None, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
@@ -158,7 +211,8 @@ def on_claim_mutation(sender, **kwargs):
         return []
     impacted_claims = Claim.objects.filter(uuid__in=uuids).all()
     for claim in impacted_claims:
-        ClaimMutation.objects.create(claim=claim, mutation_id=kwargs["mutation_log_id"])
+        ClaimMutation.objects.create(
+            claim=claim, mutation_id=kwargs["mutation_log_id"])
     return []
 
 

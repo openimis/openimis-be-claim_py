@@ -13,13 +13,17 @@ from location.models import UserDistrict
 from medical import models as medical_models
 from policy import models as policy_models
 from product import models as product_models
+from django.apps import apps
+
+core_config = apps.get_app_config('core')
 
 
 class ClaimAdmin(core_models.VersionedModel):
     id = models.AutoField(db_column='ClaimAdminId', primary_key=True)
     uuid = models.CharField(db_column='ClaimAdminUUID', max_length=36, default=uuid.uuid4, unique=True)
 
-    code = models.CharField(db_column='ClaimAdminCode', max_length=8, blank=True, null=True)
+    code = models.CharField(db_column='ClaimAdminCode', max_length=core_config.user_username_and_code_length_limit,
+                            blank=True, null=True)
     last_name = models.CharField(db_column='LastName', max_length=100, blank=True, null=True)
     other_names = models.CharField(db_column='OtherNames', max_length=100, blank=True, null=True)
     dob = models.DateField(db_column='DOB', blank=True, null=True)
@@ -75,8 +79,24 @@ class ClaimAdmin(core_models.VersionedModel):
     def check_password(self, raw_password):
         return False
 
+    @property
+    def officer_allowed_locations(self):
+        """
+        Returns uuid of all locations allowed for given officer
+        """
+        district = self.health_facility.location
+        all_allowed_uuids = [district.parent.uuid, district.uuid]
+        child_locations = location_models.Location.objects.filter(parent=district).values_list('uuid', flat=True)
+        while child_locations:
+            all_allowed_uuids.extend(child_locations)
+            child_locations = location_models.Location.objects\
+                .filter(parent__uuid__in=child_locations)\
+                .values_list('uuid', flat=True)
+
+        return location_models.Location.objects.filter(uuid__in=all_allowed_uuids)
+
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimAdmin'
 
 
@@ -96,8 +116,41 @@ class Feedback(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblFeedback'
+
+    @classmethod
+    def get_queryset(cls, queryset, user):
+        queryset = cls.filter_queryset(queryset)
+        # GraphQL calls with an info object while Rest calls with the user itself
+        if isinstance(user, ResolveInfo):
+            user = user.context.user
+        if settings.ROW_SECURITY and user.is_anonymous:
+            return queryset.filter(id=-1)
+        if settings.ROW_SECURITY:
+            dist = UserDistrict.get_user_districts(user._u)
+            return queryset.filter(
+                claim__health_facility__location_id__in=[l.location_id for l in dist]
+            )
+        return queryset
+
+
+class FeedbackPrompt(core_models.VersionedModel):
+    id = models.AutoField(db_column='FeedbackPromptID', primary_key=True)
+    feedback_prompt_date = fields.DateField(db_column='FeedbackPromptDate', blank=True, null=True)
+    claim_id = models.OneToOneField(
+        "Claim", models.DO_NOTHING, db_column='ClaimID', blank=True, null=True, related_name="+")
+    officer_id = models.IntegerField(db_column='OfficerID', blank=True, null=True)
+    phone_number = models.CharField(db_column='PhoneNumber', max_length=36, unique=True)
+    sms_status = models.IntegerField(db_column='SMSStatus', blank=True, null=True)
+    validity_from = fields.DateTimeField(db_column='ValidityFrom', blank=True, null=True)
+    validity_to = fields.DateTimeField(db_column='ValidityTo', blank=True, null=True)
+    legacy_id = models.IntegerField(db_column='LegacyID', blank=True, null=True)
+    audit_user_id = models.IntegerField(db_column='AuditUserID', blank=True, null=True)
+
+    class Meta:
+        managed = True
+        db_table = 'tblFeedbackPrompt'
 
     @classmethod
     def get_queryset(cls, queryset, user):
@@ -220,7 +273,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     # row_id = models.BinaryField(db_column='RowID', blank=True, null=True)
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaim'
 
     STATUS_REJECTED = 1
@@ -292,7 +345,7 @@ class ClaimAttachmentsCount(models.Model):
     value = models.IntegerField(db_column='attachments_count')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'claim_ClaimAttachmentsCountView'
 
 
@@ -393,7 +446,7 @@ class ClaimItem(core_models.VersionedModel, ClaimDetail, core_models.ExtendableM
     objects = ClaimDetailManager()
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimItems'
 
 
@@ -472,7 +525,7 @@ class ClaimService(core_models.VersionedModel, ClaimDetail, core_models.Extendab
     objects = ClaimDetailManager()
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimServices'
 
 
@@ -502,5 +555,5 @@ class ClaimDedRem(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimDedRem'
