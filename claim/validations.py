@@ -1104,7 +1104,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                                 for servservice in service_services:
                                     for claimserviceservice in claim_service_services:
                                         if servservice.service.id == claimserviceservice.service.id:
-                                            if servservice.qty_provided != claimserviceservice.qty_provided:
+                                            if servservice.qty_provided != claimserviceservice.qty_displayed:
                                                 set_price_adjusted = 0
                                                 break
                             else:
