@@ -2,7 +2,7 @@ import itertools
 import logging
 from collections import namedtuple
 
-from claim.models import ClaimItem, Claim, ClaimService, ClaimDedRem, ClaimDetail
+from claim.models import ClaimItem, Claim, ClaimService, ClaimDedRem, ClaimDetail, ClaimServiceService
 from core import utils
 from core.datetimes.shared import datetimedelta
 from django.db import connection
@@ -10,7 +10,7 @@ from django.db.models import Sum, Q
 from django.db.models.functions import Coalesce
 from django.utils.translation import gettext as _
 from insuree.models import InsureePolicy
-from medical.models import Service
+from medical.models import Service, ServiceService
 from medical_pricelist.models import ItemsPricelistDetail, ServicesPricelistDetail
 from policy.models import Policy
 from product.models import Product, ProductItem, ProductService, ProductItemOrService
@@ -1096,6 +1096,22 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         print("This it an item element")
                 else:
                     set_price_adjusted = pl_price
+                    try:
+                        if claim_detail.service.packagetype == 'P':
+                            service_services = ServiceService.objects.filter(servicelinkedService=claim_detail.service.id).all()
+                            claim_service_services = ClaimServiceService.objects.filter(claimlinkedService=claim_detail.id).all()
+                            if len(service_services) == len(claim_service_services):
+                                for servservice in service_services:
+                                    for claimserviceservice in claim_service_services:
+                                        if servservice.service.id == claimserviceservice.service.id:
+                                            if servservice.qty_provided != claimserviceservice.qty_provided:
+                                                set_price_adjusted = 0
+                                                break
+                            else:
+                                # user misconfiguration !
+                                set_price_adjusted = 0
+                    except:
+                        print("This it an item element")
 
             work_value = itemsvc_quantity * set_price_adjusted
 
