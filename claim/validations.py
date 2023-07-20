@@ -1146,7 +1146,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                                     set_price_adjusted = 0
                             print("set_price_adjusted after items check ", set_price_adjusted)
                     except:
-                        print("This it a ClaimItem element, not a ClaimService")
+                        print("This is a ClaimItem element, not a ClaimService")
 
             work_value = itemsvc_quantity * set_price_adjusted
 
