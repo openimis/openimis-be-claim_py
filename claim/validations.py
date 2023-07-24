@@ -1091,9 +1091,14 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                     try:
                         if claim_detail.service.packagetype == 'F':
                             service_price = claim_detail.service.price
-                            print("compare ", claim_detail.price_approved, " and ", service_price)
-                            if claim_detail.price_approved > service_price:
-                                set_price_adjusted = service_price
+                            if claim_detail.price_adjusted is not None:
+                                print("compare ", claim_detail.price_adjusted, " and ", service_price)
+                                if claim_detail.price_adjusted > service_price:
+                                    set_price_adjusted = service_price
+                            else:
+                                print("compare ", claim_detail.price_asked, " and ", service_price)
+                                if claim_detail.price_asked > service_price:
+                                    set_price_adjusted = service_price
                     except:
                         print("This it an item element")
                 else:
