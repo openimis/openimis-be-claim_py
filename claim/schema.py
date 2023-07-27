@@ -3,7 +3,7 @@ import graphene
 from core.models import Officer
 from insuree.models import Insuree
 from location.models import HealthFacility, Location
-from .services import check_unique_claim_code
+from .services import check_unique_claim_code, check_unique_claim_diagnosis
 import django
 from core.schema import signal_mutation_module_validate
 from django.db.models import OuterRef, Subquery, Avg, Q
@@ -60,6 +60,14 @@ class Query(graphene.ObjectType):
         description="Checks that the specified claim code is unique."
     )
 
+    validate_claim_diagnosis = graphene.Field(
+        graphene.Boolean,
+        insuree_id=graphene.Int(required=True),
+        date_claimed=graphene.Date(required=False),
+        icd_id=graphene.Int(required=True),
+        description="Checks that the specified diagnosis is unique for a given insuree in a given day."
+    )
+
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms)\
                 and not info.context.user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
@@ -79,6 +87,13 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
         errors = check_unique_claim_code(code=kwargs['claim_code'])
+        return False if errors else True
+
+    def resolve_validate_claim_diagnosis(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        errors = check_unique_claim_diagnosis(insuree_id=kwargs['insuree_id'], date_claimed=kwargs['date_claimed'],
+                                              icd_id=kwargs['icd_id'])
         return False if errors else True
 
     def resolve_claim(self, info, id=None, uuid=None, **kwargs):
