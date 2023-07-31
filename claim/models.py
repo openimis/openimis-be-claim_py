@@ -13,14 +13,18 @@ from location.models import UserDistrict
 from medical import models as medical_models
 from policy import models as policy_models
 from product import models as product_models
-from django.utils import timezone as django_tz 
+from django.apps import apps
+from django.utils import timezone as django_tz
+
+core_config = apps.get_app_config('core')
 
 
 class ClaimAdmin(core_models.VersionedModel):
     id = models.AutoField(db_column='ClaimAdminId', primary_key=True)
     uuid = models.CharField(db_column='ClaimAdminUUID', max_length=36, default=uuid.uuid4, unique=True)
 
-    code = models.CharField(db_column='ClaimAdminCode', max_length=8, blank=True, null=True)
+    code = models.CharField(db_column='ClaimAdminCode', max_length=core_config.user_username_and_code_length_limit,
+                            blank=True, null=True)
     last_name = models.CharField(db_column='LastName', max_length=100, blank=True, null=True)
     other_names = models.CharField(db_column='OtherNames', max_length=100, blank=True, null=True)
     dob = models.DateField(db_column='DOB', blank=True, null=True)
@@ -93,7 +97,7 @@ class ClaimAdmin(core_models.VersionedModel):
         return location_models.Location.objects.filter(uuid__in=all_allowed_uuids)
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimAdmin'
 
 
@@ -113,7 +117,7 @@ class Feedback(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblFeedback'
 
     @classmethod
@@ -146,7 +150,7 @@ class FeedbackPrompt(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID', blank=True, null=True)
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblFeedbackPrompt'
 
     @classmethod
@@ -270,7 +274,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     # row_id = models.BinaryField(db_column='RowID', blank=True, null=True)
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaim'
 
     STATUS_REJECTED = 1
@@ -342,7 +346,7 @@ class ClaimAttachmentsCount(models.Model):
     value = models.IntegerField(db_column='attachments_count')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'claim_ClaimAttachmentsCountView'
 
 
@@ -443,7 +447,7 @@ class ClaimItem(core_models.VersionedModel, ClaimDetail, core_models.ExtendableM
     objects = ClaimDetailManager()
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimItems'
 
 
@@ -521,7 +525,7 @@ class ClaimService(core_models.VersionedModel, ClaimDetail, core_models.Extendab
     objects = ClaimDetailManager()
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimServices'
 
 class ClaimServiceItem(models.Model):
@@ -587,5 +591,5 @@ class ClaimDedRem(core_models.VersionedModel):
     audit_user_id = models.IntegerField(db_column='AuditUserID')
 
     class Meta:
-        managed = False
+        managed = True
         db_table = 'tblClaimDedRem'
