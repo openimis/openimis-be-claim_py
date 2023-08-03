@@ -180,7 +180,8 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
         db_column='ClaimCategory', max_length=1, blank=True, null=True)
     insuree = models.ForeignKey(
         insuree_models.Insuree, models.DO_NOTHING, db_column='InsureeID')
-    code = models.CharField(db_column='ClaimCode', max_length=8, unique=True)
+    # do not change max_length value - use setting from apps.py
+    code = models.CharField(db_column='ClaimCode', max_length=50, unique=True)
     date_from = fields.DateField(db_column='DateFrom')
     date_to = fields.DateField(db_column='DateTo', blank=True, null=True)
     status = models.SmallIntegerField(db_column='ClaimStatus')
@@ -242,6 +243,12 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     admin = models.ForeignKey(
         ClaimAdmin, models.DO_NOTHING, db_column='ClaimAdminId',
         blank=True, null=True)
+    refer_from = models.ForeignKey(
+        location_models.HealthFacility, models.DO_NOTHING, related_name='referFromHF',
+        db_column='ReferFrom', blank=True, null=True)
+    refer_to = models.ForeignKey(
+        location_models.HealthFacility, models.DO_NOTHING, related_name='referToHF',
+        db_column='ReferTo', blank=True, null=True)
     icd = models.ForeignKey(
         medical_models.Diagnosis, models.DO_NOTHING, db_column='ICDID',
         related_name="claim_icds")
