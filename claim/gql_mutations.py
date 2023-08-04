@@ -909,6 +909,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                                 price = qty_asked * price_asked
                                 claimed += price
                                 claim_service_to_update.update(**claim_service_service)
+                        ClaimServiceElts.append(claim_service)
                 for claim_service_item in service_linked:
                     claim_item_code = claim_service_item.pop('subItemCode')
                     claim_service = claim.services.filter(id=service_id).first()
@@ -929,7 +930,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
             claim.approved = approved_amount(claim)
             claim.claimed = claimed
             for claimservice in ClaimServiceElts:
-                claimservice.price_adjusted = claimed
+                setattr(claimservice, 'price_adjusted', claimed)
                 claimservice.save()
             claim.audit_user_id_review = user.id_for_audit
             if all_rejected:
