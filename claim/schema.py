@@ -1,12 +1,12 @@
 import graphene
 from enum import Enum
 
-from core.models import Officer
+from core.models import Officer, MutationLog
 from insuree.models import Insuree
 from location.models import HealthFacility, Location
 from .services import check_unique_claim_code
 import django
-from core.schema import signal_mutation_module_validate
+from core.schema import signal_mutation_module_validate, signal_mutation_module_after_mutating
 from django.db.models import OuterRef, Subquery, Avg, Q
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
@@ -252,5 +252,23 @@ def on_claim_mutation(sender, **kwargs):
     return []
 
 
+def on_claim_after_mutation(sender, **kwargs):
+    if kwargs.get('error_messages', None):
+        return []
+    elif kwargs.get('mutation_class', None) != 'CreateClaimMutation':
+        return []
+    if 'data' in kwargs and kwargs['data'].get('autogenerate'):
+        try:
+            mutation_client_id = kwargs.get('data')['client_mutation_id']
+            mutation_log = MutationLog.objects.filter(client_mutation_id=mutation_client_id).first()
+            mutation_log.client_mutation_label = kwargs['data']['client_mutation_label']
+            mutation_log.save()
+            return []
+        except KeyError as e:
+            logger.error("Client Mutation ID not found in claim signal after mutation, error: ", e)
+    return []
+
+
 def bind_signals():
     signal_mutation_module_validate["claim"].connect(on_claim_mutation)
+    signal_mutation_module_after_mutating["claim"].connect(on_claim_after_mutation)
