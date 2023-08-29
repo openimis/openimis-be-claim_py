@@ -34,7 +34,7 @@ class Query(graphene.ObjectType):
         json_ext=graphene.JSONString(),
         attachment_status=graphene.Int(required=False),
         care_type=graphene.String(required=False),
-        showRestored=graphene.Boolean(required=False)
+        show_restored=graphene.Boolean(required=False)
     )
 
     claim = graphene.Field(
@@ -109,7 +109,7 @@ class Query(graphene.ObjectType):
             query = query.exclude(code=code_is_not)
         variance = kwargs.get("diagnosisVariance", None)
 
-        show_restored = kwargs.get("showRestored", None)
+        show_restored = kwargs.get("show_restored", None)
         if show_restored:
             query = query.filter(restore__isnull=False)
 
