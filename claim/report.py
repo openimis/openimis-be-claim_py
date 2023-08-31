@@ -40,6 +40,6 @@ report_definitions = [
         "description": "Claims Primary operational indicators",
         "module": "claim",
         "python_query": claims_primary_operational_indicators_query,
-        "permission": ["131223"],
+        "permission": ["131202"],
     },
 ]

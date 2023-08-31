@@ -219,3 +219,15 @@ msgstr "%(code)s: Claim service invalid frequency"
 #: claim/gql_mutations.py:284 claim/gql_mutations.py:284
 msgid "mutation.code_name_duplicated"
 msgstr "Code name duplicate"
+
+msgid "mutation.max_restored_claim"
+msgstr "Max allowed claim restore is: %(max_restore)"
+
+msgid "mutation.no_restore_rights"
+msgstr "You don't have rights to restore the claim"
+
+msgid "mutation.cannot_restore_not_rejected_claim"
+msgstr "Claim needs to be rejected to be restored"
+
+msgid "mutation.restored_from_does_not_exist"
+msgstr "The claim you want to restore does not exist"

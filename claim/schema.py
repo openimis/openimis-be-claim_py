@@ -1,8 +1,12 @@
-from core.models import Officer
-from location.models import HealthFacility
+import graphene
+from enum import Enum
+
+from core.models import Officer, MutationLog
+from insuree.models import Insuree
+from location.models import HealthFacility, Location
 from .services import check_unique_claim_code
 import django
-from core.schema import signal_mutation_module_validate
+from core.schema import signal_mutation_module_validate, signal_mutation_module_after_mutating
 from django.db.models import OuterRef, Subquery, Avg, Q
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
@@ -28,6 +32,9 @@ class Query(graphene.ObjectType):
         items=graphene.List(of_type=graphene.String),
         services=graphene.List(of_type=graphene.String),
         json_ext=graphene.JSONString(),
+        attachment_status=graphene.Int(required=False),
+        care_type=graphene.String(required=False),
+        show_restored=graphene.Boolean(required=False)
     )
 
     claim = graphene.Field(
@@ -47,11 +54,30 @@ class Query(graphene.ObjectType):
         OfficerGQLType, search=graphene.String()
     )
 
+    insuree_name_by_chfid = graphene.String(
+        chfId=graphene.String(required=True)
+    )
+
     validate_claim_code = graphene.Field(
         graphene.Boolean,
         claim_code=graphene.String(required=True),
         description="Checks that the specified claim code is unique."
     )
+
+    def resolve_insuree_name_by_chfid(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms)\
+                and not info.context.user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        chf_id = kwargs.get('chfId')
+        insuree = Insuree.objects\
+            .filter(validity_to__isnull=True, chf_id=chf_id)\
+            .values('last_name', 'other_names')\
+            .first()
+        if insuree:
+            insuree_name = f"{insuree['other_names']} {insuree['last_name']}"
+        else:
+            insuree_name = ""
+        return insuree_name
 
     def resolve_validate_claim_code(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
@@ -83,6 +109,10 @@ class Query(graphene.ObjectType):
             query = query.exclude(code=code_is_not)
         variance = kwargs.get("diagnosisVariance", None)
 
+        show_restored = kwargs.get("show_restored", None)
+        if show_restored:
+            query = query.filter(restore__isnull=False)
+
         items = kwargs.get("items", None)
         services = kwargs.get("services", None)
 
@@ -91,6 +121,23 @@ class Query(graphene.ObjectType):
 
         if services:
             query = query.filter(services__service__code__in=services)
+
+        attachment_status = kwargs.get("attachment_status", 0)
+
+        class AttachmentStatusEnum(Enum):
+            NONE = 0
+            WITH = 1
+            WITHOUT = 2
+
+        if attachment_status == AttachmentStatusEnum.WITH.value:
+            query = query.filter(attachments__isnull=False)
+        elif attachment_status == AttachmentStatusEnum.WITHOUT.value:
+            query = query.filter(attachments__isnull=True)
+
+        care_type = kwargs.get("care_type", None)
+
+        if care_type:
+            query = query.filter(care_type=care_type)
 
         json_ext = kwargs.get("json_ext", None)
 
@@ -161,9 +208,9 @@ class Query(graphene.ObjectType):
             filters += [Q(health_facility__in=user_health_facility)]
 
         if search:
-            filters += filters[Q(code__icontains=search) |
-                               Q(last_name__icontains=search) |
-                               Q(other_names__icontains=search)]
+            filters += [Q(code__icontains=search) |
+                        Q(last_name__icontains=search) |
+                        Q(other_names__icontains=search)]
 
         return ClaimAdmin.objects.filter(*filters)
 
@@ -216,5 +263,23 @@ def on_claim_mutation(sender, **kwargs):
     return []
 
 
+def on_claim_after_mutation(sender, **kwargs):
+    if kwargs.get('error_messages', None):
+        return []
+    elif kwargs.get('mutation_class', None) != 'CreateClaimMutation':
+        return []
+    if 'data' in kwargs and kwargs['data'].get('autogenerate'):
+        try:
+            mutation_client_id = kwargs.get('data')['client_mutation_id']
+            mutation_log = MutationLog.objects.filter(client_mutation_id=mutation_client_id).first()
+            mutation_log.client_mutation_label = kwargs['data']['client_mutation_label']
+            mutation_log.save()
+            return []
+        except KeyError as e:
+            logger.error("Client Mutation ID not found in claim signal after mutation, error: ", e)
+    return []
+
+
 def bind_signals():
     signal_mutation_module_validate["claim"].connect(on_claim_mutation)
+    signal_mutation_module_after_mutating["claim"].connect(on_claim_after_mutation)
