@@ -1,4 +1,3 @@
-import json
 import logging
 import uuid
 import pathlib
@@ -8,8 +7,9 @@ from typing import Callable, Dict
 import graphene
 import importlib
 import graphene_django_optimizer
-from django.db.models import OuterRef, Avg, Subquery, Q
+from django.db.models import Count, Case, When, IntegerField
 
+from core.models import MutationLog
 from .apps import ClaimConfig
 from claim.validations import validate_claim, get_claim_category, validate_assign_prod_to_claimitems_and_services, \
     process_dedrem, approved_amount
@@ -31,6 +31,7 @@ from product.models import ProductItemOrService
 from claim.utils import process_items_relations, process_services_relations
 from .services import check_unique_claim_code
 from django.db import transaction
+
 logger = logging.getLogger(__name__)
 
 
@@ -565,7 +566,47 @@ class DeleteAttachmentMutation(OpenIMISMutation):
                 'detail': str(exc)}]
 
 
-class SubmitClaimsMutation(OpenIMISMutation):
+class ClaimSubmissionStatsMixin:
+    @classmethod
+    def _generate_claim_submission_stats(cls, uuids):
+        claims_query = Claim.objects.filter(uuid__in=list(uuids))
+        claim_item_query = ClaimItem.objects.filter(claim__in=claims_query)
+        claim_service_query = ClaimService.objects.filter(claim__in=claims_query)
+        claim_stats = claims_query.aggregate(
+            submitted=Count('uuid', output_field=IntegerField()),
+            checked=Count(Case(When(status=4, then=1), output_field=IntegerField())),
+            processed=Count(Case(When(status=8, then=1), output_field=IntegerField())),
+            valuated=Count(Case(When(status=16, then=1), output_field=IntegerField())),
+            rejected=Count(Case(When(status=1, then=1), output_field=IntegerField())),
+        )
+        item_stats = claim_item_query.aggregate(
+            items_passed=Count(Case(When(status=1, then=1), output_field=IntegerField())),
+            items_rejected=Count(Case(When(status=2, then=1), output_field=IntegerField())),
+        )
+        service_stats = claim_service_query.aggregate(
+            services_passed=Count(Case(When(status=1, then=1), output_field=IntegerField())),
+            services_rejected=Count(Case(When(status=2, then=1), output_field=IntegerField())),
+        )
+
+        return {**claim_stats, **item_stats, **service_stats}
+
+    @classmethod
+    def _parse_submission_stats(cls, claim_submission_stats):
+        return claim_submission_stats
+
+    @classmethod
+    def add_submission_stats_to_mutation_log(cls, client_mutation_id, uuids):
+        mutation_log = MutationLog.objects.filter(client_mutation_id=client_mutation_id).first()
+        claim_submission_stats = cls._generate_claim_submission_stats(uuids)
+        parsed_stats = cls._parse_submission_stats(claim_submission_stats)
+        if isinstance(mutation_log.json_ext, dict):
+            mutation_log.json_ext["claim_stats"] = parsed_stats
+        else:
+            mutation_log.json_ext = {"claim_stats": parsed_stats}
+        mutation_log.save()
+
+
+class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
     """
     Submit one or several claims.
     """
@@ -581,12 +622,27 @@ class SubmitClaimsMutation(OpenIMISMutation):
         additional_filters = graphene.String()
 
     @classmethod
+    def _parse_submission_stats(cls, claim_submission_stats):
+        return {
+            "submitted": claim_submission_stats["submitted"],
+            "checked": claim_submission_stats["checked"],
+            "rejected": claim_submission_stats["rejected"],
+            "items_passed": claim_submission_stats["items_passed"],
+            "items_rejected": claim_submission_stats["items_rejected"],
+            "services_passed": claim_submission_stats["services_passed"],
+            "services_rejected": claim_submission_stats["services_rejected"],
+            "header": "Claims submitted",
+            # failed
+        }
+
+    @classmethod
     @mutation_on_uuids_from_filter(Claim, ClaimGQLType, 'additional_filters', __filter_handlers)
     def async_mutate(cls, user, **data):
         if not user.has_perms(ClaimConfig.gql_mutation_submit_claims_perms):
             raise PermissionDenied(_("unauthorized"))
         errors = []
         uuids = data.get("uuids", [])
+        client_mutation_id = data.get("client_mutation_id", None)
 
         for claim_uuid in uuids:
             c_errors = []
@@ -622,8 +678,10 @@ class SubmitClaimsMutation(OpenIMISMutation):
                     'title': claim.code,
                     'list': c_errors
                 })
+            count += 1
         if len(errors) == 1:
             errors = errors[0]['list']
+        cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
         logger.debug("SubmitClaimsMutation: claim done, errors: %s", len(errors))
         return errors
 
@@ -921,7 +979,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 'detail': str(exc)}]
 
 
-class ProcessClaimsMutation(OpenIMISMutation):
+class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
     """
     Process one or several claims.
     """
@@ -932,11 +990,24 @@ class ProcessClaimsMutation(OpenIMISMutation):
         uuids = graphene.List(graphene.String)
 
     @classmethod
+    def _parse_submission_stats(cls, claim_submission_stats):
+        return {
+            "submitted": claim_submission_stats["submitted"],
+            "processed": claim_submission_stats["processed"],
+            "valuated": claim_submission_stats["valuated"],
+            "rejected": claim_submission_stats["rejected"],
+            "header": "Submitted to process",
+            # failed
+        }
+
+    @classmethod
     def async_mutate(cls, user, **data):
         if not user.has_perms(ClaimConfig.gql_mutation_process_claims_perms):
             raise PermissionDenied(_("unauthorized"))
         errors = []
-        for claim_uuid in data["uuids"]:
+        uuids = data.get("uuids", None)
+        client_mutation_id = data.get("client_mutation_id", None)
+        for claim_uuid in uuids:
             logger.debug("ProcessClaimsMutation: processing %s", claim_uuid)
             c_errors = []
             claim = Claim.objects \
@@ -965,6 +1036,7 @@ class ProcessClaimsMutation(OpenIMISMutation):
 
         if len(errors) == 1:
             errors = errors[0]['list']
+        cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
         logger.debug("ProcessClaimsMutation: claims %s done, errors: %s", data["uuids"], len(errors))
         return errors
 
