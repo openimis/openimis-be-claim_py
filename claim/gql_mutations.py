@@ -678,7 +678,6 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
                     'title': claim.code,
                     'list': c_errors
                 })
-            count += 1
         if len(errors) == 1:
             errors = errors[0]['list']
         cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
