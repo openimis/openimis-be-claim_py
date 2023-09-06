@@ -3,7 +3,10 @@ import logging
 import uuid
 import pathlib
 import base64
+from typing import Callable, Dict
+
 import graphene
+import importlib
 import graphene_django_optimizer
 from django.db.models import OuterRef, Avg, Subquery, Q
 
@@ -27,6 +30,7 @@ from product.models import ProductItemOrService
 
 from claim.utils import process_items_relations, process_services_relations
 from .services import check_unique_claim_code
+from django.db import transaction
 logger = logging.getLogger(__name__)
 
 
@@ -125,7 +129,7 @@ class ClaimCodeInputType(graphene.String):
 
     @staticmethod
     def coerce_string(value):
-        assert_string_length(value, 8)
+        assert_string_length(value, ClaimConfig.max_claim_length)
         return value
 
     serialize = coerce_string
@@ -134,7 +138,7 @@ class ClaimCodeInputType(graphene.String):
     @staticmethod
     def parse_literal(ast):
         result = graphene.String.parse_literal(ast)
-        assert_string_length(result, 8)
+        assert_string_length(result, ClaimConfig.max_claim_length)
         return result
 
 
@@ -194,6 +198,7 @@ class ClaimInputType(OpenIMISMutation.Input):
     id = graphene.Int(required=False, read_only=True)
     uuid = graphene.String(required=False)
     code = ClaimCodeInputType(required=True)
+    autogenerate = graphene.Boolean(required=False)
     insuree_id = graphene.Int(required=True)
     date_from = graphene.Date(required=True)
     date_to = graphene.Date(required=False)
@@ -206,6 +211,8 @@ class ClaimInputType(OpenIMISMutation.Input):
     date_claimed = graphene.Date(required=True)
     date_processed = graphene.Date(required=False)
     health_facility_id = graphene.Int(required=True)
+    refer_from_id = graphene.Int(required=False)
+    refer_to_id = graphene.Int(required=False)
     batch_run_id = graphene.Int(required=False)
     category = graphene.String(max_length=1, required=False)
     visit_type = graphene.String(max_length=1, required=False)
@@ -214,10 +221,11 @@ class ClaimInputType(OpenIMISMutation.Input):
     explanation = graphene.String(required=False)
     adjustment = graphene.String(required=False)
     json_ext = graphene.types.json.JSONString(required=False)
-
+    restore = graphene.UUID(required=False)
     feedback_available = graphene.Boolean(default=False)
     feedback_status = TinyInt(required=False)
     feedback = graphene.Field(FeedbackInputType, required=False)
+    care_type = graphene.String(required=False)
 
     items = graphene.List(ClaimItemInputType, required=False)
     services = graphene.List(ClaimServiceInputType, required=False)
@@ -272,16 +280,58 @@ def create_attachments(claim_id, attachments):
         create_attachment(claim_id, attachment)
 
 
-def update_or_create_claim(data, user):
-    items = data.pop('items') if 'items' in data else []
-    services = data.pop('services') if 'services' in data else []
+def validate_claim_data(data, user):
+    services = data.get('services') if 'services' in data else []
     incoming_code = data.get('code')
-    claim_uuid = data.pop("uuid", None)
+    claim_uuid = data.get("uuid", None)
+    restore = data.get('restore', None)
     current_claim = Claim.objects.filter(uuid=claim_uuid).first()
     current_code = current_claim.code if current_claim else None
-    if current_code != incoming_code \
-            and check_unique_claim_code(incoming_code):
+
+    if restore:
+        restored_qs = Claim.objects.filter(uuid=restore)
+        restored_from_claim = restored_qs.first()
+        restored_count = Claim.objects.filter(restore=restored_from_claim).count()
+        if not restored_qs.exists():
+            raise ValidationError(_("mutation.restored_from_does_not_exist"))
+        if not restored_from_claim.status == Claim.STATUS_REJECTED:
+            raise ValidationError(_("mutation.cannot_restore_not_rejected_claim"))
+        if not user.has_perms(ClaimConfig.gql_mutation_restore_claims_perms):
+            raise ValidationError(_("mutation.no_restore_rights"))
+        if ClaimConfig.claim_max_restore and restored_count >= ClaimConfig.claim_max_restore:
+            raise ValidationError(_("mutation.max_restored_claim") % {
+                "max_restore": ClaimConfig.claim_max_restore
+            })
+
+    if not validate_number_of_additional_diagnoses(data):
+        raise ValidationError(_("mutation.claim_too_many_additional_diagnoses"))
+
+    if ClaimConfig.claim_validation_multiple_services_explanation_required:
+        for service in services:
+            if service["qty_provided"] > 1 and not service.get("explanation"):
+                raise ValidationError(_("mutation.service_explanation_required"))
+
+    if len(incoming_code) > ClaimConfig.max_claim_length:
+        raise ValidationError(_("mutation.code_name_too_long"))
+
+    if not restore and current_code != incoming_code and check_unique_claim_code(incoming_code):
         raise ValidationError(_("mutation.code_name_duplicated"))
+
+
+@transaction.atomic
+def update_or_create_claim(data, user):
+    validate_claim_data(data, user)
+    items = data.pop('items') if 'items' in data else []
+    services = data.pop('services') if 'services' in data else []
+    claim_uuid = data.pop("uuid", None)
+    autogenerate_code = data.pop('autogenerate', None)
+    restore = data.pop('restore', None)
+    if restore:
+        restored_qs = Claim.objects.filter(uuid=restore)
+        restored_from_claim = restored_qs.first()
+        data["restore"] = restored_from_claim
+    if autogenerate_code:
+        data['code'] = __autogenerate_claim_code()
     if "client_mutation_id" in data:
         data.pop('client_mutation_id')
     if "client_mutation_label" in data:
@@ -309,6 +359,34 @@ def update_or_create_claim(data, user):
     return claim
 
 
+def validate_number_of_additional_diagnoses(incoming_data):
+    additional_diagnoses_count = 0
+    for key in incoming_data.keys():
+        if key.startswith("icd_") and key.endswith("_id") and key != "icd_id":
+            additional_diagnoses_count += 1
+
+    return additional_diagnoses_count <= ClaimConfig.additional_diagnosis_number_allowed
+
+
+def __autogenerate_claim_code():
+    module_name, function_name = '[undefined]', '[undefined]'
+    try:
+        claim_code_function = _get_autogenerating_func()
+        return claim_code_function(ClaimConfig.autogenerated_claim_code_config)
+    except ImportError as e:
+        logger.error(f"Error: Could not import module '{module_name}' for claim code autogeneration")
+        raise e
+    except AttributeError as e:
+        logger.error(f"Error: Could not find function '{function_name}' in module '{module_name}' for claim code autogeneration")
+        raise e
+
+
+def _get_autogenerating_func() -> Callable[[Dict], Callable]:
+    module_name, function_name = ClaimConfig.autogenerate_func.rsplit('.', 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, function_name)
+
+
 class CreateClaimMutation(OpenIMISMutation):
     """
     Create a new claim. The claim items and services can all be entered with this call
@@ -328,11 +406,7 @@ class CreateClaimMutation(OpenIMISMutation):
                     _("mutation.authentication_required"))
             if not user.has_perms(ClaimConfig.gql_mutation_create_claims_perms):
                 raise PermissionDenied(_("unauthorized"))
-            # Claim code unicity should be enforced at DB Scheme level...
-            if Claim.objects.filter(code=data['code']).exists():
-                return [{
-                    'message': _("claim.mutation.duplicated_claim_code") % {'code': data['code']},
-                }]
+            is_claim_code_autogenerated = data.get("autogenerate", False)
             data['audit_user_id'] = user.id_for_audit
             data['status'] = Claim.STATUS_ENTERED
             from core.utils import TimeUtils
@@ -341,6 +415,8 @@ class CreateClaimMutation(OpenIMISMutation):
             claim = update_or_create_claim(data, user)
             if attachments:
                 create_attachments(claim.id, attachments)
+            if is_claim_code_autogenerated:
+                return {"client_mutation_label": f"Create Claim - {claim.code}", "code": f"{claim.code}"}
             return None
         except Exception as exc:
             return [{
