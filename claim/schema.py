@@ -64,6 +64,13 @@ class Query(graphene.ObjectType):
         description="Checks that the specified claim code is unique."
     )
 
+    claim_with_same_diagnosis = OrderedDjangoFilterConnectionField(
+        ClaimGQLType,
+        icd=graphene.String(required=True),
+        chfid=graphene.String(required=True),
+        description="Return last claim (date claimed) with identical diagnosis for given insuree."
+    )
+
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms)\
                 and not info.context.user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
@@ -226,6 +233,15 @@ class Query(graphene.ObjectType):
                 | Q(last_name__icontains=search)
                 | Q(other_names__icontains=search)
             )
+        return qs
+
+    def resolve_claim_with_same_diagnosis(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+        qs = Claim.objects.filter(icd__code=kwargs['icd'], icd__validity_to__isnull=True,
+                                  insuree__chf_id=kwargs['chfid'], insuree__validity_to__isnull=True,
+                                  validity_to__isnull=True).order_by("date_claimed")
         return qs
 
 
