@@ -4,7 +4,10 @@ from unittest import mock
 import datetime
 from .services import *
 import core
-
+from medical.test_helpers import create_test_service, create_test_item
+from claim.utils import service_create_hook, calcul_amount_service, service_update_hook
+from claim.test_helpers import create_test_claim
+from claim.models import ClaimServiceItem, ClaimServiceService
 
 class ClaimSubmitServiceTestCase(TestCase):
 
@@ -173,10 +176,17 @@ class ClaimSubmitServiceTestCase(TestCase):
         claim = self._get_test_dict()
         service = ClaimSubmitService(user=mock_user)
         submitted_claim = service.enter_and_submit(claim, False)
-        expected_claimed = 2 * 7 * 11  # 2 provisions, both qty = 7, price asked == 11
+        # Uses the qty * price_asked when it's item_create_hook
+        expected_claimed = 1 * 7 * 11  # 1 provisions, qty = 7, price asked == 11
+
+        # Then uses the calcul_amount_service() method when it's service_hook
+        # It showld be 11 (the price_asked) because the is no serviceLinked nor serviceserviceSet
+        expected_claimed += 11
+        expected_approved = 2 * 7 * 11  # 2 provisions, both qty = 7, price asked == 11
+
 
         self.assertEqual(submitted_claim.status, Claim.STATUS_CHECKED)
-        self.assertEqual(submitted_claim.approved, expected_claimed)
+        self.assertEqual(submitted_claim.approved, expected_approved)
         self.assertEqual(submitted_claim.claimed, expected_claimed)
         self.assertEqual(submitted_claim.health_facility.id, 18)
         self.assertEqual(len(submitted_claim.items.all()), 1)
@@ -200,6 +210,53 @@ class ClaimSubmitServiceTestCase(TestCase):
         with self.assertRaises(ValidationError):
             service.enter_and_submit(claim, False)
 
+    def test_service_create_hook(self):
+        item = create_test_item("D", custom_props={})
+        service = create_test_service("V")
+        claim = create_test_claim()
+        service_items_dict = {
+            "qty_provided": 7, "price_asked": 11, "service_id": 23,
+            "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
+            "serviceLinked": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
+            "serviceserviceSet": [{"subServiceCode": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
+        }
+        service_create_hook(claim.id, service_items_dict)
+        claim_service_item = ClaimServiceItem.objects.filter(item=item.id)
+        self.assertTrue(len(claim_service_item) > 0)
+        claim_service_item = claim_service_item.first()
+        self.assertEquals(claim_service_item.qty_displayed, 1)
+        self.assertEquals(claim_service_item.qty_provided, 7)
+        self.assertEquals(claim_service_item.price_asked, 11)
+
+        claim_service_service = ClaimServiceService.objects.filter(service=service.id)
+        self.assertTrue(len(claim_service_service) > 0)
+        claim_service_service = claim_service_service.first()
+        self.assertEquals(claim_service_service.qty_displayed, 2)
+        self.assertEquals(claim_service_service.qty_provided, 3)
+        self.assertEquals(claim_service_service.price_asked, 20)
+
+        service_items_dict["serviceLinked"] = [{"qty_asked": 90, "subItemCode": item.code}]
+        service_items_dict["serviceserviceSet"] = [{"qty_asked": 100, "subServiceCode": service.code}]
+            
+        service_update_hook(claim.id, service_items_dict)
+        claim_service_service.refresh_from_db()
+        self.assertEqual(100, claim_service_service.qty_displayed)
+        
+        claim_service_item.refresh_from_db()
+        self.assertEqual(90, claim_service_item.qty_displayed)
+    
+    def test_calcul_amount_service(self):
+        item = create_test_item("D", custom_props={})
+        service = create_test_service("V")
+        service_items_dict = {
+            "qty_provided": 5, "price_asked": 50, "service_id": 23,
+            "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
+            "serviceLinked": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
+            "serviceserviceSet": [{"subServiceCode": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
+        }
+        result = calcul_amount_service(service_items_dict)
+        self.assertEqual(result, 51)
+    
     def _get_test_dict(self):
         return {
             "health_facility_id": 18, "icd_id": 116, "date_from": datetime.datetime(2019, 6, 1), "code": "CLCODE1",
@@ -211,6 +268,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             }],
             "services": [{
                 "qty_provided": 7, "price_asked": 11, "service_id": 23,  # Skin graft, no cat
-                "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1
+                "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
+                "serviceLinked": [], "serviceserviceSet": []
             }]
         }

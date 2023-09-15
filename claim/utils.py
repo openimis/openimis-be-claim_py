@@ -45,11 +45,13 @@ def calcul_amount_service(elt):
     if len(elt['serviceLinked'])!=0 and len(elt['serviceserviceSet'])!=0:
         totalClaimed = 0
         for serviceLinked in elt['serviceLinked']:
-            if serviceLinked['qty_asked'].is_nan() == False:
-                totalClaimed += serviceLinked['qty_asked'] * serviceLinked['price_asked']
+            if "qty_asked" in serviceLinked:
+                if serviceLinked["qty_asked"]:
+                    totalClaimed += serviceLinked['qty_asked'] * serviceLinked['price_asked']
         for serviceserviceSet in elt['serviceserviceSet']:
-            if serviceserviceSet['qty_asked'].is_nan() == False:
-                totalClaimed += serviceserviceSet['qty_asked'] * serviceserviceSet['price_asked']
+            if "qty_asked" in serviceserviceSet:
+                if serviceserviceSet["qty_asked"]:
+                    totalClaimed += serviceserviceSet['qty_asked'] * serviceserviceSet['price_asked']
     return totalClaimed
         
 
@@ -81,69 +83,67 @@ def item_create_hook(claim_id, item):
 
 
 def service_create_hook(claim_id, service):
-    serviceLinked = service.serviceLinked
-    serviceserviceSet = service.serviceserviceSet
-    service.pop('serviceLinked', None)
-    service.pop('serviceserviceSet', None)
+    serviceLinked = service.pop('serviceLinked', None)
+    serviceserviceSet = service.pop('serviceserviceSet', None)
     ClaimServiceId = ClaimService.objects.create(claim_id=claim_id, **service)
     if(serviceLinked):
         for serviceL in serviceLinked:
-            serviceL.pop('subItemCode', None)
-            if serviceL.qty_asked.is_nan() :
-                serviceL.qty_asked = 0
-            itemId = Item.objects.filter(code=serviceL.subItemCode).first()
+            if "qty_asked" in serviceL:
+                if not serviceL["qty_asked"]:
+                    serviceL["qty_asked"] = 0
+            itemId = Item.objects.filter(code=serviceL["subItemCode"]).first()
             ClaimServiceItem.objects.create(
                 item = itemId,
                 claimlinkedItem = ClaimServiceId,
-                qty_displayed = serviceL.qty_asked,
-                qty_provided = serviceL.qty_provided,
-                price_asked = serviceL.price_asked,
+                qty_displayed = serviceL["qty_asked"],
+                qty_provided = serviceL["qty_provided"],
+                price_asked = serviceL["price_asked"],
             )
 
     if(serviceserviceSet):
         for serviceserviceS in serviceserviceSet:
-            serviceserviceS.pop('subItemCode', None)
-            if serviceserviceS.qty_asked.is_nan() :
-                serviceserviceS.qty_asked = 0
-            serviceId = Service.objects.filter(code=serviceserviceS.subServiceCode).first()
+            if "qty_asked" in serviceserviceS :
+                if not serviceserviceS["qty_asked"]:
+                    serviceserviceS["qty_asked"] = 0
+            serviceId = Service.objects.filter(code=serviceserviceS["subServiceCode"]).first()
             ClaimServiceService.objects.create(
                 service = serviceId,
                 claimlinkedService = ClaimServiceId,
-                qty_displayed = serviceserviceS.qty_asked,
-                qty_provided = serviceserviceS.qty_provided,
-                price_asked = serviceserviceS.price_asked,
+                qty_displayed = serviceserviceS["qty_asked"],
+                qty_provided = serviceserviceS["qty_provided"],
+                price_asked = serviceserviceS["price_asked"],
             )
 
 def service_update_hook(claim_id, service):
-    serviceLinked = service.serviceLinked
-    serviceserviceSet = service.serviceserviceSet
+    serviceLinked = service["serviceLinked"]
+    serviceserviceSet = service["serviceserviceSet"]
     service.pop('serviceLinked', None)
     service.pop('serviceserviceSet', None)
-    ClaimServiceId = ClaimService.objects.filter(claim=claim_id, service=service.service_id).first()
+    ClaimServiceId = ClaimService.objects.filter(claim=claim_id, service=service["service_id"]).first()
     if(serviceLinked):
         for serviceL in serviceLinked:
-            serviceL.pop('subItemCode', None)
-            if serviceL.qty_asked.is_nan() :
-                serviceL.qty_asked = 0
-            itemId = Item.objects.filter(code=serviceL.subItemCode).first()
+            if "qty_asked" in serviceL:
+                if not serviceL["qty_asked"]:
+                    serviceL["qty_asked"] = 0
+            itemId = Item.objects.filter(code=serviceL["subItemCode"]).first()
             claimServiceItemId = ClaimServiceItem.objects.filter(
                 item=itemId,
                 claimlinkedItem = ClaimServiceId
             ).first()
-            claimServiceItemId.qty_displayed=serviceL.qty_asked
+            claimServiceItemId.qty_displayed=serviceL["qty_asked"]
             claimServiceItemId.save()
 
     if(serviceserviceSet):
         for serviceserviceS in serviceserviceSet:
-            serviceserviceS.pop('subItemCode', None)
-            if serviceserviceS.qty_asked.is_nan() :
-                serviceserviceS.qty_asked = 0
-            serviceId = Service.objects.filter(code=serviceserviceS.subServiceCode).first()
+            if "qty_asked" in serviceserviceS:
+                if not serviceserviceS["qty_asked"]:
+                    serviceserviceS["qty_asked"] = 0
+            serviceId = Service.objects.filter(code=serviceserviceS["subServiceCode"]).first()
             claimServiceServiceId = ClaimServiceService.objects.filter(
                 service=serviceId,
                 claimlinkedService = ClaimServiceId
             ).first()
-            claimServiceServiceId.qty_displayed=serviceserviceS.qty_asked
+            claimServiceServiceId.qty_displayed=serviceserviceS["qty_asked"]
             claimServiceServiceId.save()
 
 def process_items_relations(user, claim, items):
