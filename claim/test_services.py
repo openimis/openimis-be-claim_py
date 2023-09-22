@@ -1,12 +1,21 @@
 from django.test import TestCase
 from unittest import mock
-
+from location.test_helpers import create_test_location, create_test_health_facility
 import datetime
 from .services import *
 import core
 
 
 class ClaimSubmitServiceTestCase(TestCase):
+    hf = None
+    test_region = None
+    test_district = None
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.test_region = create_test_location('R')
+        cls.test_district = create_test_location('D', custom_props={"parent_id": cls.test_region.id})
+        cls.hf=create_test_health_facility("code-tst-hf", cls.test_district, valid=True, custom_props={})
 
     def test_minimal_item_claim_submit_xml(self):
         items = [
@@ -22,7 +31,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code='ADM_CODE_ADKJ',
             insuree_chf_id='CHFID_UUZIS',
-            health_facility_code="HFCode_JQL",
+            health_facility_code=self.hf.code,
             item_submits=items,
         )
         details = "<Details>"
@@ -52,7 +61,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code='ADM_CODE_ADKJ',
             insuree_chf_id='CHFID_UUZIS',
-            health_facility_code="HFCode_JQL",
+            health_facility_code=self.hf.code,
             service_submits=services,
         )
         details = "<Details>"
@@ -92,7 +101,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code='ADM_CODE_ADKJ',
             insuree_chf_id='CHFID_UUZIS',
-            health_facility_code="HFCode_JQL",
+            health_facility_code=self.hf.code,
             item_submits=items,
             service_submits=services
         )
@@ -132,7 +141,7 @@ class ClaimSubmitServiceTestCase(TestCase):
                 start_date=core.datetime.date(2020, 1, 13),
                 claim_admin_code='ADM_CODE_ADKJ',
                 insuree_chf_id='CHFID_UUZIS',
-                health_facility_code="HFCode_JQL"
+                health_facility_code=self.hf.code,
             )
             service = ClaimSubmitService(user=mock_user)
             with self.assertRaises(ClaimSubmitError) as cm:
@@ -157,7 +166,7 @@ class ClaimSubmitServiceTestCase(TestCase):
                     start_date=core.datetime.date(2020, 1, 13),
                     claim_admin_code='ADM_CODE_ADKJ',
                     insuree_chf_id='CHFID_UUZIS',
-                    health_facility_code="HFCode_JQL"
+                    health_facility_code=self.hf.code,
                 )
                 service = ClaimSubmitService(user=mock_user)
                 service.submit(claim)  # doesn't raise an error
