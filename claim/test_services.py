@@ -12,7 +12,7 @@ class ClaimSubmitServiceTestCase(TestCase):
     test_district = None
     @classmethod
     def setUp(self):
-        super().setUp()
+        super(ClaimSubmitServiceTestCase, self).setUp()
         self.test_region = create_test_location('R')
         self.test_district = create_test_location('D', custom_props={"parent_id": self.test_region.id})
         self.hf=create_test_health_facility("1", self.test_district.id, valid=True)
