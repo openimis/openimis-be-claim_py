@@ -22,7 +22,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         self.hf=create_test_health_facility("1", self.test_district.id, valid=True)
         props = dict(
             last_name="name",
-            other_names="name1".first_name(),
+            other_names="surname",
             dob=fake.date_between(start_date='-105y', end_date='today'),
             chf_id=random.randrange(100000000, 999999999),
         )
@@ -32,6 +32,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         self.test_insuree = create_test_insuree(is_head=True, custom_props=props, family_custom_props=family_props)
         self.test_claim_admin= create_test_claim_admin()
         self.icd = Diagnosis(code='ICD00I')
+        self.idc.save()
 
     def test_minimal_item_claim_submit_xml(self):
         items = [
