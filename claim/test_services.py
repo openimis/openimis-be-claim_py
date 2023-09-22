@@ -15,7 +15,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         super().setUpClass()
         self.test_region = create_test_location('R')
         self.test_district = create_test_location('D', custom_props={"parent_id": self.test_region.id})
-        self.hf=create_test_health_facility("hftst1", self.test_district.id, valid=True)
+        self.hf=create_test_health_facility("1", self.test_district.id, valid=True)
 
     def test_minimal_item_claim_submit_xml(self):
         items = [
