@@ -24,7 +24,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             last_name="name",
             other_names="surname",
             dob=core.datetime.date(2000, 1, 13),
-            chf_id=random.randrange(100000000, 999999999),
+            chf_id="884930485",
         )
         family_props = dict(
             location_id=self.get_random_village(),
