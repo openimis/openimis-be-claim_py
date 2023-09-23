@@ -60,12 +60,12 @@ class ClaimSubmitServiceTestCase(TestCase):
         )
         details = "<Details>"
         details = details + "<ClaimDate>09/01/2020</ClaimDate>"
-        details = details + "<HFCode>HFCode_JQL</HFCode>"
-        details = details + "<ClaimAdmin>ADM_CODE_ADKJ</ClaimAdmin>"
+        details = details + f"<HFCode>{self.test_hf.code}</HFCode>"
+        details = details + "<ClaimAdmin>{self.test_claim_admin.code}</ClaimAdmin>"
         details = details + "<ClaimCode>code_ABVC</ClaimCode>"
-        details = details + "<CHFID>CHFID_UUZIS</CHFID>"
+        details = details + f"<CHFID>{self.test_insuree.chf_id}</CHFID>"
         details = details + "<StartDate>13/01/2020</StartDate>"
-        details = details + "<ICDCode>ICD_CODE_WWQ</ICDCode>"
+        details = details + f"<ICDCode>{self.test_icd.code}</ICDCode>"
         details = details + "<Total>334</Total>"
         details = details + "</Details>"
         expected = "<Claim>%s<Items>%s</Items></Claim>" % (details, item)
@@ -90,12 +90,12 @@ class ClaimSubmitServiceTestCase(TestCase):
         )
         details = "<Details>"
         details = details + "<ClaimDate>09/01/2020</ClaimDate>"
-        details = details + "<HFCode>HFCode_JQL</HFCode>"
-        details = details + "<ClaimAdmin>ADM_CODE_ADKJ</ClaimAdmin>"
+        details = details + f"<HFCode>{self.test_hf.code}</HFCode>"
+        details = details + "<ClaimAdmin>{self.test_claim_admin.code}</ClaimAdmin>"
         details = details + "<ClaimCode>code_ABVC</ClaimCode>"
-        details = details + "<CHFID>CHFID_UUZIS</CHFID>"
+        details = details + f"<CHFID>{self.test_insuree.chf_id}</CHFID>"
         details = details + "<StartDate>13/01/2020</StartDate>"
-        details = details + "<ICDCode>ICD_CODE_WWQ</ICDCode>"
+        details = details + f"<ICDCode>{self.test_icd.code}</ICDCode>"
         details = details + "<Total>334</Total>"
         details = details + "</Details>"
         expected = "<Claim>%s<Services>%s</Services></Claim>" % (
@@ -129,14 +129,15 @@ class ClaimSubmitServiceTestCase(TestCase):
             item_submits=items,
             service_submits=services
         )
+          
         details = "<Details>"
         details = details + "<ClaimDate>09/01/2020</ClaimDate>"
-        details = details + "<HFCode>HFCode_JQL</HFCode>"
-        details = details + "<ClaimAdmin>ADM_CODE_ADKJ</ClaimAdmin>"
+        details = details + f"<HFCode>{self.test_hf.code}</HFCode>"
+        details = details + "<ClaimAdmin>{self.test_claim_admin.code}</ClaimAdmin>"
         details = details + "<ClaimCode>code_ABVC</ClaimCode>"
-        details = details + "<CHFID>CHFID_UUZIS</CHFID>"
+        details = details + f"<CHFID>{self.test_insuree.chf_id}</CHFID>"        
         details = details + "<StartDate>13/01/2020</StartDate>"
-        details = details + "<ICDCode>ICD_CODE_WWQ</ICDCode>"
+        details = details + f"<ICDCode>{self.test_icd.code}</ICDCode>"
         details = details + "<Total>334</Total>"
         details = details + "</Details>"
         expected = "<Claim>%s" % details
