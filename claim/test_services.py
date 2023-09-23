@@ -39,7 +39,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         self.test_insuree = create_test_insuree(is_head=True, custom_props=props, family_custom_props=family_props)
         self.test_claim_admin= create_test_claim_admin()
         self.icd = Diagnosis(code='ICD00I', name='diag test')
-        self.idc.save()
+        self.icd.save()
 
     def test_minimal_item_claim_submit_xml(self):
         items = [
