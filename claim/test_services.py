@@ -12,6 +12,8 @@ class ClaimSubmitServiceTestCase(TestCase):
     hf = None
     test_region = None
     test_district = None
+    test_ward = None
+    test_village = None
     test_insuree =None
     test_claim_admin = None
     icd = None
@@ -19,6 +21,9 @@ class ClaimSubmitServiceTestCase(TestCase):
     def setUp(self):
         self.test_region = create_test_location('R')
         self.test_district = create_test_location('D', custom_props={"parent_id": self.test_region.id})
+        self.test_ward = create_test_location('W', custom_props={"parent_id": self.test_district.id})
+        self.test_village = create_test_location('V', custom_props={"parent_id": self.test_ward.id})
+
         self.hf=create_test_health_facility("1", self.test_district.id, valid=True)
         props = dict(
             last_name="name",
@@ -27,7 +32,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             chf_id="884930485",
         )
         family_props = dict(
-            location_id=self.get_random_village(),
+            location_id=self.test_village.id,
         )
         self.test_insuree = create_test_insuree(is_head=True, custom_props=props, family_custom_props=family_props)
         self.test_claim_admin= create_test_claim_admin()
