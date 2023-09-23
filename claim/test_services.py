@@ -11,7 +11,7 @@ import core
 
 
 class ClaimSubmitServiceTestCase(TestCase):
-    hf = None
+    test_hf = None
     test_region = None
     test_district = None
     test_ward = None
@@ -26,7 +26,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         cls.test_ward = create_test_location('W', custom_props={"parent_id": cls.test_district.id})
         cls.test_village = create_test_location('V', custom_props={"parent_id": cls.test_ward.id})
 
-        cls.hf=create_test_health_facility("1", cls.test_district.id, valid=True)
+        cls.test_hf=create_test_health_facility("1", cls.test_district.id, valid=True)
         props = dict(
             last_name="name",
             other_names="surname",
@@ -55,7 +55,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code=self.test_claim_admin.code,
             insuree_chf_id=self.test_insuree.chf_id,
-            health_facility_code=self.hf.code,
+            health_facility_code=self.test_hf.code,
             item_submits=items,
         )
         details = "<Details>"
@@ -85,7 +85,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code=self.test_claim_admin.code,
             insuree_chf_id=self.test_insuree.chf_id,
-            health_facility_code=self.hf.code,
+            health_facility_code=self.test_hf.code,
             service_submits=services,
         )
         details = "<Details>"
@@ -125,7 +125,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code=self.test_claim_admin.code,
             insuree_chf_id=self.test_insuree.chf_id,
-            health_facility_code=self.hf.code,
+            health_facility_code=self.test_hf.code,
             item_submits=items,
             service_submits=services
         )
@@ -166,7 +166,7 @@ class ClaimSubmitServiceTestCase(TestCase):
                 start_date=core.datetime.date(2020, 1, 13),
                 claim_admin_code=self.test_claim_admin.code,
                 insuree_chf_id=self.test_insuree.chf_id,
-                health_facility_code=self.hf.code,
+                health_facility_code=self.test_hf.code,
             )
             service = ClaimSubmitService(user=mock_user)
             with self.assertRaises(ClaimSubmitError) as cm:
@@ -191,7 +191,7 @@ class ClaimSubmitServiceTestCase(TestCase):
                     start_date=core.datetime.date(2020, 1, 13),
                     claim_admin_code=self.test_claim_admin.code,
                     insuree_chf_id=self.test_insuree.chf_id,
-                    health_facility_code=self.hf.code,
+                    health_facility_code=self.test_hf.code,
                 )
                 service = ClaimSubmitService(user=mock_user)
                 service.submit(claim)  # doesn't raise an error
