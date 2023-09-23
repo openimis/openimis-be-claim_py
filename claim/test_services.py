@@ -4,7 +4,7 @@ from location.test_helpers import create_test_location, create_test_health_facil
 from insuree.test_helpers import create_test_insuree
 from claim.test_helpers import create_test_claim_admin
 from medical.models import  Diagnosis
-
+from core.services import create_or_update_interactive_user, create_or_update_core_user
 import datetime
 from .services import *
 import core
@@ -20,13 +20,13 @@ class ClaimSubmitServiceTestCase(TestCase):
     test_claim_admin = None
     icd = None
     @classmethod
-    def setUp(self):
-        self.test_region = create_test_location('R')
-        self.test_district = create_test_location('D', custom_props={"parent_id": self.test_region.id})
-        self.test_ward = create_test_location('W', custom_props={"parent_id": self.test_district.id})
-        self.test_village = create_test_location('V', custom_props={"parent_id": self.test_ward.id})
+    def setUpTestData(cls):
+        cls.test_region = create_test_location('R')
+        cls.test_district = create_test_location('D', custom_props={"parent_id": cls.test_region.id})
+        cls.test_ward = create_test_location('W', custom_props={"parent_id": cls.test_district.id})
+        cls.test_village = create_test_location('V', custom_props={"parent_id": cls.test_ward.id})
 
-        self.hf=create_test_health_facility("1", self.test_district.id, valid=True)
+        cls.hf=create_test_health_facility("1", cls.test_district.id, valid=True)
         props = dict(
             last_name="name",
             other_names="surname",
@@ -34,12 +34,12 @@ class ClaimSubmitServiceTestCase(TestCase):
             chf_id="884930485",
         )
         family_props = dict(
-            location_id=self.test_village.id,
+            location_id=cls.test_village.id,
         )
-        self.test_insuree = create_test_insuree(is_head=True, custom_props=props, family_custom_props=family_props)
-        self.test_claim_admin= create_test_claim_admin()
-        self.icd = Diagnosis(code='ICD00I', name='diag test')
-        self.icd.save()
+        cls.test_insuree= create_test_insuree(is_head=True, custom_props=props, family_custom_props=family_props)
+        cls.test_claim_admin= create_test_claim_admin()
+        cls.icd = Diagnosis(code='ICD00I', name='diag test', audit_user_id=-1)
+        cls.icd.save()
 
     def test_minimal_item_claim_submit_xml(self):
         items = [
