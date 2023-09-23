@@ -3,6 +3,8 @@ from unittest import mock
 from location.test_helpers import create_test_location, create_test_health_facility
 from insuree.test_helpers import create_test_insuree
 from claim.test_helpers import create_test_claim_admin
+from medical.models import  Diagnosis
+
 import datetime
 from .services import *
 import core
@@ -36,7 +38,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         )
         self.test_insuree = create_test_insuree(is_head=True, custom_props=props, family_custom_props=family_props)
         self.test_claim_admin= create_test_claim_admin()
-        self.icd = Diagnosis(code='ICD00I')
+        self.icd = Diagnosis(code='ICD00I', name='diag test')
         self.idc.save()
 
     def test_minimal_item_claim_submit_xml(self):
