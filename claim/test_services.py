@@ -23,7 +23,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         props = dict(
             last_name="name",
             other_names="surname",
-            dob=fake.date_between(start_date='-105y', end_date='today'),
+            dob=core.datetime.date(2000, 1, 13),
             chf_id=random.randrange(100000000, 999999999),
         )
         family_props = dict(
