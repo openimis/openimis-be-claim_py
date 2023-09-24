@@ -18,7 +18,7 @@ class ClaimSubmitServiceTestCase(TestCase):
     test_village = None
     test_insuree =None
     test_claim_admin = None
-    icd = None
+    test_icd = None
     @classmethod
     def setUpTestData(cls):
         cls.test_region = create_test_location('R')
@@ -38,8 +38,8 @@ class ClaimSubmitServiceTestCase(TestCase):
         )
         cls.test_insuree= create_test_insuree(is_head=True, custom_props=props, family_custom_props=family_props)
         cls.test_claim_admin= create_test_claim_admin()
-        cls.icd = Diagnosis(code='ICD00I', name='diag test', audit_user_id=-1)
-        cls.icd.save()
+        cls.test_icd = Diagnosis(code='ICD00I', name='diag test', audit_user_id=-1)
+        cls.test_icd.save()
 
     def test_minimal_item_claim_submit_xml(self):
         items = [
@@ -50,7 +50,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         claim = ClaimSubmit(
             date=core.datetime.date(2020, 1, 9),
             code="code_ABVC",
-            icd_code=self.icd.code,
+            icd_code=self.test_icd.code,
             total=334,
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code=self.test_claim_admin.code,
@@ -80,7 +80,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         claim = ClaimSubmit(
             date=core.datetime.date(2020, 1, 9),
             code="code_ABVC",
-            icd_code=self.icd.code,
+            icd_code=self.test_icd.code,
             total=334,
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code=self.test_claim_admin.code,
@@ -120,7 +120,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         claim = ClaimSubmit(
             date=core.datetime.date(2020, 1, 9),
             code="code_ABVC",
-            icd_code=self.icd.code,
+            icd_code=self.test_icd.code,
             total=334,
             start_date=core.datetime.date(2020, 1, 13),
             claim_admin_code=self.test_claim_admin.code,
@@ -161,7 +161,7 @@ class ClaimSubmitServiceTestCase(TestCase):
             claim = ClaimSubmit(
                 date=core.datetime.date(2020, 1, 9),
                 code="code_ABVC",
-                icd_code=self.icd.code,
+                icd_code=self.test_icd.code,
                 total=334,
                 start_date=core.datetime.date(2020, 1, 13),
                 claim_admin_code=self.test_claim_admin.code,
@@ -186,7 +186,7 @@ class ClaimSubmitServiceTestCase(TestCase):
                 claim = ClaimSubmit(
                     date=core.datetime.date(2020, 1, 9),
                     code="code_ABVC",
-                    icd_code=self.icd.code,
+                    icd_code=self.test_icd.code,
                     total=334,
                     start_date=core.datetime.date(2020, 1, 13),
                     claim_admin_code=self.test_claim_admin.code,
