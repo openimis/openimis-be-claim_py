@@ -206,6 +206,8 @@ class ClaimInputType(OpenIMISMutation.Input):
     date_claimed = graphene.Date(required=True)
     date_processed = graphene.Date(required=False)
     health_facility_id = graphene.Int(required=True)
+    refer_from_id = graphene.Int(required=False)
+    refer_to_id = graphene.Int(required=False)
     batch_run_id = graphene.Int(required=False)
     category = graphene.String(max_length=1, required=False)
     visit_type = graphene.String(max_length=1, required=False)
