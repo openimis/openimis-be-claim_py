@@ -526,7 +526,8 @@ class ValidationTest(TestCase):
         # Given
         from core import datetime
         insuree = create_test_insuree()
-        child_insuree = create_test_insuree(custom_props={
+        child_insuree = create_test_insuree( with_family = False,
+            custom_props={
             "dob": datetime.datetime(2020, 1, 1),
             "family": insuree.family
         })
