@@ -1,6 +1,6 @@
 from django.test import TestCase
 from unittest import mock
-from location.test_helpers import create_test_location, create_test_health_facility
+from location.test_helpers import create_test_location, create_test_health_facility,create_test_village
 from insuree.test_helpers import create_test_insuree
 from claim.test_helpers import create_test_claim_admin
 from claim.models import Claim, ClaimItem, ClaimService,ClaimDetail
@@ -29,12 +29,12 @@ class ClaimSubmitServiceTestCase(TestCase):
     
 
     @classmethod
-    def setUpTestDate(cls):
-        if self.test_region is None:
-            self.test_village  =create_test_village( custom_props={"code":self._TEST_VILLAGE_CODE,"name":self._TEST_VILLAGE_NAME})
-            self.test_ward =self.test_village.parent
-            self.test_region =self.test_village.parent.parent.parent
-            self.test_district = self.test_village.parent.parent
+    def setUpTestData(cls):
+        if cls.test_region is None:
+            cls.test_village  =create_test_village( )
+            cls.test_ward =cls.test_village.parent
+            cls.test_region =cls.test_village.parent.parent.parent
+            cls.test_district = cls.test_village.parent.parent
 
         cls.test_hf=create_test_health_facility("1", cls.test_district.id, valid=True)
         props = dict(
