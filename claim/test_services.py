@@ -15,22 +15,25 @@ import core
 
 class ClaimSubmitServiceTestCase(TestCase):
     test_hf = None
-    test_region = None
-    test_district = None
-    test_ward = None
-    test_village = None
+
     test_insuree =None
     test_claim_admin = None
     test_icd = None
     test_claim = None
     test_claim_item = None
     test_claim_service = None
+    test_region = None
+    test_district = None
+    test_village = None
+    test_ward = None
+    
     @classmethod
-    def setUpTestData(cls):
-        cls.test_region = create_test_location('R')
-        cls.test_district = create_test_location('D', custom_props={"parent_id": cls.test_region.id})
-        cls.test_ward = create_test_location('W', custom_props={"parent_id": cls.test_district.id})
-        cls.test_village = create_test_location('V', custom_props={"parent_id": cls.test_ward.id})
+    def setUpTestDate(cls):
+        if self.test_region is None:
+            self.test_village  =create_test_village( custom_props={"code":self._TEST_VILLAGE_CODE,"name":self._TEST_VILLAGE_NAME})
+            self.test_ward =self.test_village.parent
+            self.test_region =self.test_village.parent.parent.parent
+            self.test_district = self.test_village.parent.parent
 
         cls.test_hf=create_test_health_facility("1", cls.test_district.id, valid=True)
         props = dict(

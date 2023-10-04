@@ -1,7 +1,7 @@
 from claim.models import Claim, ClaimService, ClaimItem, ClaimDedRem, ClaimAdmin
 from claim.validations import get_claim_category, approved_amount
 from medical.test_helpers import get_item_of_type, get_service_of_category
-
+from uuid import uuid4
 
 def create_test_claim(custom_props={}):
     from core import datetime
@@ -78,17 +78,34 @@ def delete_claim_with_itemsvc_dedrem_and_history(claim):
 
 def create_test_claim_admin(custom_props={}):
     from core import datetime
-    return ClaimAdmin.objects.create(
-        **{
-            "code": "TST00001",
-            "last_name": "LastAdmin",
-            "other_names": "JoeAdmin",
-            "email_id": "joeadmin@lastadmin.com",
-            "phone": "+12027621401",
-            "health_facility_id": 1,
-            "has_login": False,
-            "audit_user_id": 1,
-            "validity_from": datetime.datetime(2019, 6, 1),
-            **custom_props
-        }
-    )
+    code = custom_props.pop('code',None)
+    uuid = custom_props.pop('uuid',None)
+    ca = None
+    qs_ca = ClaimAdmin.objects
+    data = {
+        "code": code,
+        "uuid": uuid,
+        "last_name": "LastAdmin",
+        "other_names": "JoeAdmin",
+        "email_id": "joeadmin@lastadmin.com",
+        "phone": "+12027621401",
+        "health_facility_id": 1,
+        "has_login": False,
+        "audit_user_id": 1,
+        "validity_from": datetime.datetime(2019, 6, 1),
+        **custom_props
+    }
+    if code:
+        qs_ca = qs_ca.filter(code=code)
+    if uuid:
+        qs_ca = qs_ca.filter(uuid=uuid)
+        
+    if code or uuid:
+        ca = qs_ca.first()
+    if ca:
+        data['uuid']=ca.uuid
+        ca.update(data)
+        return ca
+    else:
+        data['uuid']=uuid4()
+        return ClaimAdmin.objects.create( **data)
