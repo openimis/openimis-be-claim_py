@@ -27,6 +27,7 @@ class ClaimSubmitServiceTestCase(TestCase):
     test_village = None
     test_ward = None
     
+
     @classmethod
     def setUpTestDate(cls):
         if self.test_region is None:
