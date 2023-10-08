@@ -221,6 +221,7 @@ class ClaimInputType(OpenIMISMutation.Input):
 
     items = graphene.List(ClaimItemInputType, required=False)
     services = graphene.List(ClaimServiceInputType, required=False)
+    prescriber_type = TinyInt(required=False)
 
 
 class CreateClaimInputType(ClaimInputType):
