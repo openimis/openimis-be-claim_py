@@ -6,7 +6,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('claim', '0017_set_managed_to_true'),
+        ('claim', '0016_update_django_scheme_with_missing_fields'),
     ]
 
     operations = [
