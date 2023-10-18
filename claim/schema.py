@@ -3,7 +3,7 @@ from enum import Enum
 
 from core.models import Officer, MutationLog
 from insuree.models import Insuree
-from location.models import HealthFacility, Location
+from location.models import HealthFacility, Location, LocationManager
 from .services import check_unique_claim_code
 import django
 from core.schema import signal_mutation_module_validate, signal_mutation_module_after_mutating
@@ -174,13 +174,9 @@ class Query(graphene.ObjectType):
                 )
                 variance_filter = variance_filter | ~Q(icd__code__in=diags)
             query = query.filter(variance_filter)
-
-        from location.models import Location
-        user_districts = UserDistrict.get_user_districts(info.context.user._u)
-        query = query.filter(
-            Q(health_facility__location__in=Location.objects.filter(uuid__in=user_districts.values_list('location__uuid', flat=True))) | Q(
-                health_facility__location__in=Location.objects.filter(uuid__in=user_districts.values_list('location__parent__uuid', flat=True))))
-
+        query = queryset.filter(
+                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location') 
+                )
         return gql_optimizer.query(query.all(), info)
 
     def resolve_claim_attachments(self, info, **kwargs):
@@ -206,8 +202,7 @@ class Query(graphene.ObjectType):
         if region_uuid is not None:
             hf_filters += [Q(location__parent__uuid=region_uuid)]
         if settings.ROW_SECURITY:
-            dist = UserDistrict.get_user_districts(info.context.user._u)
-            hf_filters += [Q(location__id__in=[l.location_id for l in dist])]
+            hf_filters += [LocationManager.build_user_location_filter_query( user, prefix='health_facility__location') ]
         user_health_facility = HealthFacility.objects.filter(*hf_filters)
 
         filters = [*filter_validity(**kwargs)]

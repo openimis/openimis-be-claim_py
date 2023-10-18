@@ -35,13 +35,9 @@ def print(request):
 def attach(request):
     queryset = ClaimAttachment.objects.filter(*core.filter_validity())
     if settings.ROW_SECURITY:
-        from location.models import UserDistrict
-        dist = UserDistrict.get_user_districts(request.user._u)
+        from location.models import LocationManager
         queryset = queryset.select_related("claim")\
-            .filter(
-            claim__health_facility__location__id__in=[
-                loc.location_id for loc in dist]
-        )
+                .filter(LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))
     attachment = queryset\
         .filter(id=request.GET['id'])\
         .first()

@@ -78,7 +78,7 @@ def delete_claim_with_itemsvc_dedrem_and_history(claim):
 
 def create_test_claim_admin(custom_props={}):
     from core import datetime
-    code = custom_props.pop('code',None)
+    code = custom_props.pop('code','TST-CA')
     uuid = custom_props.pop('uuid',None)
     ca = None
     qs_ca = ClaimAdmin.objects

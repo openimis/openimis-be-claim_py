@@ -48,10 +48,8 @@ class ClaimAdmin(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
-            dist = UserDistrict.get_user_districts(user._u)
-            return queryset.filter(
-                health_facility__location_id__in=[l.location_id for l in dist]
-            )
+            queryset = queryset.filter(
+                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))     
         return queryset
 
     @property
@@ -128,10 +126,8 @@ class Feedback(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
-            dist = UserDistrict.get_user_districts(user._u)
-            return queryset.filter(
-                claim__health_facility__location_id__in=[l.location_id for l in dist]
-            )
+            queryset = queryset.filter(
+                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))     
         return queryset
 
 
@@ -161,10 +157,8 @@ class FeedbackPrompt(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
-            dist = UserDistrict.get_user_districts(user._u)
-            return queryset.filter(
-                claim__health_facility__location_id__in=[l.location_id for l in dist]
-            )
+            queryset = queryset.filter(
+                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))
         return queryset
 
 
@@ -337,15 +331,13 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
         if settings.ROW_SECURITY:
             # TechnicalUsers don't have health_facility_id attribute
             if hasattr(user._u, 'health_facility_id') and user._u.health_facility_id:
-                return queryset.filter(
+                queryset =  queryset.filter(
                     health_facility_id=user._u.health_facility_id
                 )
             else:
                 if not isinstance(user._u, core_models.TechnicalUser):
-                    dist = UserDistrict.get_user_districts(user._u)
-                    return queryset.filter(
-                        health_facility__location_id__in=dist.values_list("location_id", flat=True)
-                    )
+                    queryset = queryset.filter(
+                        LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))
         return queryset
 
 

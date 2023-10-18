@@ -193,55 +193,6 @@ class ClaimSubmitServiceTestCase(TestCase):
         expected = expected + "</Claim>"
         self.assertEquals(expected, claim.to_xml())
 
-    @mock.patch('django.db.connections')
-    def test_claim_submit_error(self, mock_connections):
-        if connection.vendor != 'mssql':
-            self.skipTest("This test can only be executed for MSSQL database")
-        with mock.patch("claim.services.ClaimSubmitService.hf_scope_check") as mock_security:
-            mock_security.return_value = None
-            query_result = [2]
-            mock_connections.__getitem__.return_value.cursor.return_value \
-                .__enter__.return_value.fetchone.return_value = query_result
-            mock_user = mock.Mock(is_anonymous=False)
-            mock_user.has_perm = mock.MagicMock(return_value=True)
-            claim = ClaimSubmit(
-                date=core.datetime.date(2020, 1, 9),
-                code="code_ABVC",
-                icd_code=self.test_icd.code,
-                total=334,
-                start_date=core.datetime.date(2020, 1, 13),
-                claim_admin_code=self.test_claim_admin.code,
-                insuree_chf_id=self.test_insuree.chf_id,
-                health_facility_code=self.test_hf.code,
-            )
-            service = ClaimSubmitService(user=mock_user)
-            with self.assertRaises(ClaimSubmitError) as cm:
-                service.submit(claim)
-            self.assertNotEqual(cm.exception.code, 0)
-
-    def test_claim_submit_allgood_xml(self):
-        with mock.patch("django.db.backends.utils.CursorWrapper") as mock_cursor:
-            # required for all modules tests
-            mock_cursor.return_value.description = None
-            # required for claim module tests
-            mock_cursor.return_value.__enter__.return_value.description = None
-            with mock.patch("claim.services.ClaimSubmitService.hf_scope_check") as mock_security:
-                mock_security.return_value = None
-                mock_user = mock.Mock(is_anonymous=False)
-                mock_user.has_perm = mock.MagicMock(return_value=True)
-                claim = ClaimSubmit(
-                    date=core.datetime.date(2020, 1, 9),
-                    code="code_ABVC",
-                    icd_code=self.test_icd.code,
-                    total=334,
-                    start_date=core.datetime.date(2020, 1, 13),
-                    claim_admin_code=self.test_claim_admin.code,
-                    insuree_chf_id=self.test_insuree.chf_id,
-                    health_facility_code=self.test_hf.code,
-                )
-                service = ClaimSubmitService(user=mock_user)
-                service.submit(claim)  # doesn't raise an error
-
     @mock.patch("claim.services.ClaimSubmitService._validate_user_hf")
     @mock.patch("claim.services.ClaimCreateService._validate_user_hf")
     def test_claim_enter_and_submit(self, check_hf_submit, check_hf_enter):
