@@ -199,10 +199,10 @@ class Query(graphene.ObjectType):
         region_uuid = kwargs.get('region_uuid', None)
         if district_uuid is not None:
             hf_filters += [Q(location__uuid=district_uuid)]
-        if region_uuid is not None:
+        elif region_uuid is not None:
             hf_filters += [Q(location__parent__uuid=region_uuid)]
         if settings.ROW_SECURITY:
-            hf_filters += [LocationManager().build_user_location_filter_query( info.context.user._u, prefix='health_facility__location') ]
+            hf_filters += [LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location') ]
         user_health_facility = HealthFacility.objects.filter(*hf_filters)
 
         filters = [*filter_validity(**kwargs)]
