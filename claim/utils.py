@@ -1,3 +1,4 @@
+import math
 from claim.models import ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem ,ClaimServiceService
 from medical.models import Item, Service
 
@@ -64,7 +65,7 @@ def service_create_hook(claim_id, service):
     if(serviceLinked):
         for serviceL in serviceLinked:
             if "qty_asked" in serviceL:
-                if not serviceL["qty_asked"]:
+                if (math.isnan(serviceL["qty_asked"])):
                     serviceL["qty_asked"] = 0
             itemId = Item.objects.filter(code=serviceL["subItemCode"]).first()
             ClaimServiceItem.objects.create(
@@ -78,7 +79,7 @@ def service_create_hook(claim_id, service):
     if(serviceserviceSet):
         for serviceserviceS in serviceserviceSet:
             if "qty_asked" in serviceserviceS :
-                if not serviceserviceS["qty_asked"]:
+                if (math.isnan(serviceserviceS["qty_asked"])):
                     serviceserviceS["qty_asked"] = 0
             serviceId = Service.objects.filter(code=serviceserviceS["subServiceCode"]).first()
             ClaimServiceService.objects.create(
@@ -98,7 +99,7 @@ def service_update_hook(claim_id, service):
     if(serviceLinked):
         for serviceL in serviceLinked:
             if "qty_asked" in serviceL:
-                if not serviceL["qty_asked"]:
+                if (math.isnan(serviceL["qty_asked"])):
                     serviceL["qty_asked"] = 0
             itemId = Item.objects.filter(code=serviceL["subItemCode"]).first()
             claimServiceItemId = ClaimServiceItem.objects.filter(
@@ -111,7 +112,7 @@ def service_update_hook(claim_id, service):
     if(serviceserviceSet):
         for serviceserviceS in serviceserviceSet:
             if "qty_asked" in serviceserviceS:
-                if not serviceserviceS["qty_asked"]:
+                if (math.isnan(serviceserviceS["qty_asked"])):
                     serviceserviceS["qty_asked"] = 0
             serviceId = Service.objects.filter(code=serviceserviceS["subServiceCode"]).first()
             claimServiceServiceId = ClaimServiceService.objects.filter(
