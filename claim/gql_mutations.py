@@ -479,7 +479,7 @@ class CreateAttachmentMutation(OpenIMISMutation):
             queryset = Claim.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
                 queryset = queryset.filter(
-                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))            
+                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))            
             claim = queryset.filter(uuid=claim_uuid).first()
             if not claim:
                 raise PermissionDenied(_("unauthorized"))
@@ -508,7 +508,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
                 from location.models import UserDistrict
                 queryset = queryset.select_related("claim") \
                     .filter(
-                    LocationManager.build_user_location_filter_query( user, prefix='claim__health_facility__location')
+                    LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location')
                 )
             attachment = queryset \
                 .filter(id=data['id']) \
@@ -544,7 +544,7 @@ class DeleteAttachmentMutation(OpenIMISMutation):
             queryset = ClaimAttachment.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
                 queryset = queryset.filter(
-                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))     
+                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))     
             attachment = queryset \
                 .filter(id=data['id']) \
                 .first()

@@ -49,7 +49,7 @@ class ClaimAdmin(core_models.VersionedModel):
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
             queryset = queryset.filter(
-                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))     
+                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))     
         return queryset
 
     @property
@@ -127,7 +127,7 @@ class Feedback(core_models.VersionedModel):
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
             queryset = queryset.filter(
-                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))     
+                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))     
         return queryset
 
 
@@ -158,7 +158,7 @@ class FeedbackPrompt(core_models.VersionedModel):
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
             queryset = queryset.filter(
-                    LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))
+                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))
         return queryset
 
 
@@ -337,7 +337,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
             else:
                 if not isinstance(user._u, core_models.TechnicalUser):
                     queryset = queryset.filter(
-                        LocationManager.build_user_location_filter_query( user, prefix='health_facility__location'))
+                        LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))
         return queryset
 
 
