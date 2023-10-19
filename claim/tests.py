@@ -85,26 +85,4 @@ class ClaimGraphQLTestCase(GraphQLTestCase):
         # This validates the status code and if you get errors
         self.assertResponseNoErrors(response)
 
-        # Add some more asserts if you like
-
-    #def test_some_mutation(self):
-    #    response = self.query(
-    #        '''
-    #        mutation myMutation($input: MyMutationInput!) {
-    #            myMutation(input: $input) {
-    #                my-model {
-    #
-    #                    id
-    #                    name
-    #                }
-    #            }
-    #        }
-    #        ''',
-    #        op_name='myMutation',
-    #        input_data={'my_field': 'foo', 'other_field': 'bar'}
-    #    )
-
-        # This validates the status code and if you get errors
-    #    self.assertResponseNoErrors(response)
-
-        # Add some more asserts if you like
+       
