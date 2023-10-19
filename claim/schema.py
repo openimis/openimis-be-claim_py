@@ -178,6 +178,7 @@ class Query(graphene.ObjectType):
         #query = query.filter(
         #            LocationManager().build_user_location_filter_query( info.context.user._u, prefix='health_facility__location') 
         #        )
+
         return gql_optimizer.query(query.all(), info)
 
     def resolve_claim_attachments(self, info, **kwargs):
@@ -204,6 +205,7 @@ class Query(graphene.ObjectType):
             hf_filters += [Q(location__parent__uuid=region_uuid)]
         #if settings.ROW_SECURITY: already in get_queryset
         #    hf_filters += [LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location') ]
+
         user_health_facility = HealthFacility.objects.filter(*hf_filters)
 
         filters = [*filter_validity(**kwargs)]
