@@ -9,7 +9,7 @@ from django.db import models
 from graphql import ResolveInfo
 from insuree import models as insuree_models
 from location import models as location_models
-from location.models import UserDistrict
+from location.models import UserDistrict, LocationManager
 from medical import models as medical_models
 from policy import models as policy_models
 from product import models as product_models
@@ -48,6 +48,7 @@ class ClaimAdmin(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
+            from location.schema import  LocationManager
             queryset = queryset.filter(
                     LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))     
         return queryset
@@ -80,7 +81,7 @@ class ClaimAdmin(core_models.VersionedModel):
     @property
     def officer_allowed_locations(self):
         """
-        Returns uuid of all locations allowed for given officer
+        Returns uuid of all locations allowed for given officerLocationManager
         """
         district = self.health_facility.location
         all_allowed_uuids = [district.parent.uuid, district.uuid]

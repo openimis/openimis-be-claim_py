@@ -124,8 +124,7 @@ class ClaimGQLType(DjangoObjectType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        claim_ids = Claim.get_queryset(queryset, info).values('uuid').all()
-        return Claim.objects.filter(uuid__in=claim_ids)
+        return Claim.get_queryset(queryset, info).values('uuid').all()
 
 
 class ClaimAttachmentGQLType(DjangoObjectType):

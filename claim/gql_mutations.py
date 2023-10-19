@@ -21,7 +21,6 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError, PermissionDenied, ObjectDoesNotExist
 from django.utils.translation import gettext as _
 from graphene import InputObjectType
-from location.schema import UserDistrict, LocationManager
 
 from claim.gql_queries import ClaimGQLType
 from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, \
@@ -505,7 +504,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
                 raise PermissionDenied(_("unauthorized"))
             queryset = ClaimAttachment.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
-                from location.models import UserDistrict
+                from location.schema import  LocationManager
                 queryset = queryset.select_related("claim") \
                     .filter(
                     LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location')
