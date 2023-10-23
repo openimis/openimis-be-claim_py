@@ -47,11 +47,11 @@ def calcul_amount_service(elt):
         totalClaimed = 0
         for serviceLinked in elt['serviceLinked']:
             if "qty_asked" in serviceLinked:
-                if serviceLinked["qty_asked"]:
+                if not (math.isnan(serviceLinked["qty_asked"])):
                     totalClaimed += serviceLinked['qty_asked'] * serviceLinked['price_asked']
         for serviceserviceSet in elt['serviceserviceSet']:
             if "qty_asked" in serviceserviceSet:
-                if serviceserviceSet["qty_asked"]:
+                if not (math.isnan(serviceserviceSet["qty_asked"])):
                     totalClaimed += serviceserviceSet['qty_asked'] * serviceserviceSet['price_asked']
     return totalClaimed
         
