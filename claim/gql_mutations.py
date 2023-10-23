@@ -505,6 +505,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
             if settings.ROW_SECURITY:
                 from location.schema import  LocationManager
                 queryset = LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location', queryset = queryset.select_related("claim"))
+
             attachment = queryset \
                 .filter(id=data['id']) \
                 .first()

@@ -127,6 +127,7 @@ class ClaimGQLType(DjangoObjectType):
         return Claim.get_queryset(queryset, info).all()
 
 
+
 class ClaimAttachmentGQLType(DjangoObjectType):
     doc = graphene.String()
 
