@@ -110,7 +110,7 @@ class Query(graphene.ObjectType):
             and settings.ROW_SECURITY
         ):
             raise PermissionDenied(_("unauthorized"))
-        query = Claim.objects
+        query = Claim.objects.all()
         code_is_not = kwargs.get("code_is_not", None)
         if code_is_not:
             query = query.exclude(code=code_is_not)
@@ -204,7 +204,9 @@ class Query(graphene.ObjectType):
         elif region_uuid is not None:
             hf_filters += [Q(location__parent__uuid=region_uuid)]
         if settings.ROW_SECURITY:
-            hf_filters += [LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location') ]
+            q = LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location')
+            if q:
+                hf_filters += [q]
 
         user_health_facility = HealthFacility.objects.filter(*hf_filters)
 

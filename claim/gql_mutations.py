@@ -477,8 +477,7 @@ class CreateAttachmentMutation(OpenIMISMutation):
             claim_uuid = data.pop("claim_uuid")
             queryset = Claim.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
-                queryset = queryset.filter(
-                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))            
+                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset)           
             claim = queryset.filter(uuid=claim_uuid).first()
             if not claim:
                 raise PermissionDenied(_("unauthorized"))
@@ -505,10 +504,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
             queryset = ClaimAttachment.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
                 from location.schema import  LocationManager
-                queryset = queryset.select_related("claim") \
-                    .filter(
-                    LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location')
-                )
+                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location', queryset = queryset.select_related("claim"))
             attachment = queryset \
                 .filter(id=data['id']) \
                 .first()
@@ -542,8 +538,7 @@ class DeleteAttachmentMutation(OpenIMISMutation):
                 raise PermissionDenied(_("unauthorized"))
             queryset = ClaimAttachment.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
-                queryset = queryset.filter(
-                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))     
+                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset = queryset)     
             attachment = queryset \
                 .filter(id=data['id']) \
                 .first()

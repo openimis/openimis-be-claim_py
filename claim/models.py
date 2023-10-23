@@ -49,8 +49,7 @@ class ClaimAdmin(core_models.VersionedModel):
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
             from location.schema import  LocationManager
-            queryset = queryset.filter(
-                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))     
+            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset)    
         return queryset
 
     @property
@@ -127,8 +126,7 @@ class Feedback(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
-            queryset = queryset.filter(
-                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))     
+            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset)    
         return queryset
 
 
@@ -158,8 +156,8 @@ class FeedbackPrompt(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
-            queryset = queryset.filter(
-                    LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))
+            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset)    
+
         return queryset
 
 
@@ -337,8 +335,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
                 )
             else:
                 if not isinstance(user._u, core_models.TechnicalUser):
-                    queryset = queryset.filter(
-                        LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location'))
+                    queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset = queryset)
         return queryset
 
 
