@@ -3,7 +3,7 @@ from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimServi
 from medical.models import Item, Service
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
-
+from .apps import ClaimConfig
 
 def process_child_relation(user, data_children, claim_id, children, create_hook):
     claimed = 0
@@ -11,8 +11,11 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
     if __check_if_maximum_amount_overshoot(data_children, children):
         raise ValidationError(_("mutation.claim_item_service_maximum_amount_overshoot"))
     for data_elt in data_children:
-        if create_hook==service_create_hook :
-            claimed += calcul_amount_service(data_elt)
+        if ClaimConfig.compute_prices_and_check_validation == True:
+            if create_hook==service_create_hook :
+                claimed += calcul_amount_service(data_elt)
+            else:
+                claimed += data_elt['qty_provided'] * data_elt['price_asked']
         else:
             claimed += data_elt['qty_provided'] * data_elt['price_asked']
 

@@ -891,7 +891,6 @@ class SaveClaimReviewMutation(OpenIMISMutation):
             services = data.pop('services') if 'services' in data else []
             claimed = 0
             ClaimServiceElts = []
-            print("Configuration", ClaimConfig.compute_prices_and_check_validation)
             for service in services:
                 service_id = service.pop('id')
                 service_linked = service.pop('serviceLinked', [])
@@ -935,9 +934,10 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 if service['status'] == ClaimService.STATUS_PASSED:
                     all_rejected = False
             claim.approved = approved_amount(claim)
-            claim.claimed = claimed
-            for claimservice in ClaimServiceElts:
-                setattr(claimservice, 'price_adjusted', claimed)
+            if ClaimConfig.compute_prices_and_check_validation == True:
+                claim.claimed = claimed
+                for claimservice in ClaimServiceElts:
+                    setattr(claimservice, 'price_adjusted', claimed)
             claim.audit_user_id_review = user.id_for_audit
             if all_rejected:
                 claim.status = Claim.STATUS_REJECTED
