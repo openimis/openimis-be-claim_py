@@ -898,7 +898,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 serviceserviceSet = service.pop('serviceserviceSet', [])
                 print("serviceserviceSet ", serviceserviceSet)
                 claim.services.filter(id=service_id).update(**service)
-                if ClaimConfig.compute_prices_and_check_validation == True:
+                if ClaimConfig.native_code_for_services == False:
                     for claim_service_service in serviceserviceSet:
                         claim_service_code = claim_service_service.pop('subServiceCode')
                         claim_service = claim.services.filter(id=service_id).first()
@@ -934,7 +934,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 if service['status'] == ClaimService.STATUS_PASSED:
                     all_rejected = False
             claim.approved = approved_amount(claim)
-            if ClaimConfig.compute_prices_and_check_validation == True:
+            if ClaimConfig.native_code_for_services == False:
                 claim.claimed = claimed
                 for claimservice in ClaimServiceElts:
                     setattr(claimservice, 'price_adjusted', claimed)
