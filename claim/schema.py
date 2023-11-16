@@ -204,7 +204,7 @@ class Query(graphene.ObjectType):
         elif region_uuid is not None:
             hf_filters += [Q(location__parent__uuid=region_uuid)]
         if settings.ROW_SECURITY:
-            q = LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location')
+            q = LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location', loc_types=['D'])
             if q:
                 hf_filters += [q]
 

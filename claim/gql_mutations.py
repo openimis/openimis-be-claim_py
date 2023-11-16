@@ -478,7 +478,7 @@ class CreateAttachmentMutation(OpenIMISMutation):
             queryset = Claim.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
                 from location.schema import LocationManager
-                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset)           
+                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset, loc_types=['D'])           
             claim = queryset.filter(uuid=claim_uuid).first()
             if not claim:
                 raise PermissionDenied(_("unauthorized"))
@@ -505,7 +505,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
             queryset = ClaimAttachment.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
                 from location.schema import  LocationManager
-                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location', queryset = queryset.select_related("claim"))
+                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location', queryset = queryset.select_related("claim"), loc_types=['D'])
 
             attachment = queryset \
                 .filter(id=data['id']) \
@@ -541,7 +541,7 @@ class DeleteAttachmentMutation(OpenIMISMutation):
             queryset = ClaimAttachment.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
                 from location.schema import LocationManager
-                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset = queryset)     
+                queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset = queryset, loc_types=['D'])     
             attachment = queryset \
                 .filter(id=data['id']) \
                 .first()
