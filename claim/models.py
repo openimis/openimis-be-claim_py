@@ -49,7 +49,7 @@ class ClaimAdmin(core_models.VersionedModel):
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
             from location.schema import  LocationManager
-            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset, loc_types = ['D'])    
+            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset, loc_type = ['D'])    
         return queryset
 
     @property
@@ -126,7 +126,7 @@ class Feedback(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
-            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset, loc_types=['D'])    
+            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset, loc_type=['D'])    
         return queryset
 
 
@@ -156,7 +156,7 @@ class FeedbackPrompt(core_models.VersionedModel):
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
         if settings.ROW_SECURITY:
-            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset, loc_types=['D'])    
+            queryset =  LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset=queryset, loc_type=['D'])    
 
         return queryset
 
@@ -335,7 +335,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
                 )
             else:
                 if not isinstance(user._u, core_models.TechnicalUser):
-                    queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset = queryset, loc_types=['D'])
+                    queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset = queryset, loc_type=['D'])
         return queryset
 
 
