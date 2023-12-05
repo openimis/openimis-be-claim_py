@@ -131,6 +131,7 @@ class Feedback(core_models.VersionedModel):
 
 
 
+
 signal_claim_rejection = dispatch.Signal(providing_args=["claim"])
 
 
@@ -307,6 +308,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
                 if not isinstance(user._u, core_models.TechnicalUser):
                     queryset = LocationManager().build_user_location_filter_query( user._u, prefix='health_facility__location', queryset = queryset, loc_types=['D'])
         return queryset
+      
 class FeedbackPrompt(core_models.VersionedModel):
     id = models.AutoField(db_column='FeedbackPromptID', primary_key=True)
     feedback_prompt_date = fields.DateField(db_column='FeedbackPromptDate', blank=True, null=True)
