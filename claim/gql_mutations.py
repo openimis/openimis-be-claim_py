@@ -715,7 +715,7 @@ def create_feedback_prompt(claim_uuid, user):
     from core.utils import TimeUtils
     feedback_prompt['feedback_prompt_date'] = TimeUtils.date()
     feedback_prompt['validity_from'] = TimeUtils.now()
-    feedback_prompt['claim_id'] = current_claim
+    feedback_prompt['claim'] = current_claim
     feedback_prompt['officer_id'] = current_claim.admin_id
     feedback_prompt['audit_user_id'] = user.id_for_audit
     FeedbackPrompt.objects.create(
@@ -725,8 +725,8 @@ def create_feedback_prompt(claim_uuid, user):
 
 def set_feedback_prompt_validity_to_to_current_date(claim_uuid):
     try:
-        claim_id = Claim.objects.get(uuid=claim_uuid).id
-        feedback_prompt_id = FeedbackPrompt.objects.get(claim_id=claim_id, validity_to=None).id
+        claim = Claim.objects.get(uuid=claim_uuid).id
+        feedback_prompt_id = FeedbackPrompt.objects.get(claim=claim, validity_to=None).id
         from core.utils import TimeUtils
         current_feedback_prompt = FeedbackPrompt.objects.get(id=feedback_prompt_id)
         current_feedback_prompt.validity_to = TimeUtils.now()

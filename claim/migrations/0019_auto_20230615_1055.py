@@ -22,4 +22,9 @@ class Migration(migrations.Migration):
             name='refer_to',
             field=models.ForeignKey(blank=True, db_column='ReferTo', null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='referToHF', to='location.healthfacility'),
         ),
+        migrations.RenameField(
+            model_name='feedbackprompt',
+            old_name='claim_id',
+            new_name='claim',
+        ),
     ]
