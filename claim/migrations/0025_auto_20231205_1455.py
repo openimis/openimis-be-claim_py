@@ -12,13 +12,9 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RemoveField(
+        migrations.AlterField(
             model_name='feedbackprompt',
             name='officer_id',
-        ),
-        migrations.AddField(
-            model_name='feedbackprompt',
-            name='officer',
             field=models.ForeignKey(blank=True, db_column='OfficerID', null=True, on_delete=django.db.models.deletion.DO_NOTHING, to='core.officer'),
         ),
         migrations.AlterField(
@@ -26,4 +22,15 @@ class Migration(migrations.Migration):
             name='claim_id',
             field=models.ForeignKey(blank=True, db_column='ClaimID', null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='+', to='claim.claim'),
         ),
+        migrations.RenameField(
+            model_name='feedbackprompt',
+            old_name='officer_id',
+            new_name='officer'
+        ),
+        migrations.RenameField(
+            model_name='feedbackprompt',
+            old_name='claim_id',
+            new_name='claim'
+        )
+        
     ]
