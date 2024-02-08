@@ -181,3 +181,13 @@ def __get_current_nepali_fiscal_year_code():
 
     year_code = str(current_year) + "-" + str(current_year+1)[-3:] + "-"
     return year_code
+
+
+def get_queryset_valid_at_date(queryset, date):
+    filtered_qs = queryset.filter(
+        validity_to__gte=date,
+        validity_from__lte=date
+    )
+    if filtered_qs.exists():
+        return filtered_qs
+    return queryset.filter(validity_from__lte=date, validity_to__isnull=True)

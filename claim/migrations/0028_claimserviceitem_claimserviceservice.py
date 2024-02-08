@@ -8,7 +8,7 @@ import django.utils.timezone
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('claim', '0020_alter_claim_code'),
+        ('claim', '0027_auto_20240203_2339'),
     ]
 
     operations = [

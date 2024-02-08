@@ -1,7 +1,9 @@
-from claim.gql_mutations import set_claims_status, update_claims_dedrems
+from claim.services import update_claims_dedrems, set_claims_status
 from claim.models import Claim, ClaimDedRem, ClaimItem, ClaimDetail, ClaimService, ClaimServiceItem, ClaimServiceService
 from claim.test_helpers import create_test_claim, create_test_claimservice, create_test_claimitem, \
     mark_test_claim_as_processed, delete_claim_with_itemsvc_dedrem_and_history
+from core.test_helpers import create_test_officer
+
 from claim.validations import get_claim_category, validate_claim, validate_assign_prod_to_claimitems_and_services, \
     process_dedrem, REJECTION_REASON_WAITING_PERIOD_FAIL, REJECTION_REASON_INVALID_ITEM_OR_SERVICE
 from core.models import User, InteractiveUser
@@ -9,11 +11,15 @@ from django.test import TestCase
 from insuree.models import Family, Insuree
 from insuree.test_helpers import create_test_insuree
 from location.models import HealthFacility
-from medical.test_helpers import create_test_service, create_test_item
 from medical_pricelist.test_helpers import add_service_to_hf_pricelist, add_item_to_hf_pricelist
 from medical.models import ServiceItem, ServiceService
-from policy.test_helpers import create_test_policy
 from product.models import ProductItemOrService
+from medical.test_helpers import create_test_service, create_test_item
+from medical_pricelist.test_helpers import add_service_to_hf_pricelist, add_item_to_hf_pricelist, \
+    update_pricelist_service_detail_in_hf_pricelist, update_pricelist_item_detail_in_hf_pricelist
+from policy.test_helpers import create_test_policy
+ 
+
 # default arguments should not pass a list or a dict because they're mutable but we don't risk mutating them here:
 # noinspection PyDefaultArgument,DuplicatedCode
 from product.test_helpers import create_test_product, create_test_product_service, create_test_product_item
@@ -260,7 +266,7 @@ class ValidationTest(TestCase):
 
         # Then
         claim1.refresh_from_db()
-        self.assertEquals(len(errors), 1)
+        self.assertEquals(len(errors), 2)
         self.assertEquals(errors[0]['code'], 1)  # claimed rejected because all services are rejected
         self.assertEquals(claim1.services.first().rejection_reason, 4)  # reason is wrong insuree mask
 
@@ -526,7 +532,8 @@ class ValidationTest(TestCase):
         # Given
         from core import datetime
         insuree = create_test_insuree()
-        child_insuree = create_test_insuree(custom_props={
+        child_insuree = create_test_insuree( with_family = False,
+            custom_props={
             "dob": datetime.datetime(2020, 1, 1),
             "family": insuree.family
         })
@@ -544,7 +551,7 @@ class ValidationTest(TestCase):
         service1 = create_test_claimservice(claim1, custom_props={"service_id": service.id})
         errors = validate_claim(claim1, True)
 
-        self.assertEqual(len(errors), 1, "An adult visit within the waiting period should be refused")
+        self.assertEqual(len(errors), 2, "An adult visit within the waiting period should be refused")
         self.assertEqual(claim1.services.first().rejection_reason, REJECTION_REASON_WAITING_PERIOD_FAIL)
 
         # a visit after the waiting period should be fine
@@ -1036,6 +1043,95 @@ class ValidationTest(TestCase):
         service.delete()
         item.delete()
         product.delete()
+
+    def test_submit_claim_dedrem_update_pricelist_detail(self):
+        '''
+        This test replicates the functionality of test_submit_claim_dedrem,
+        with the additional step of updating items and services prior to dedrem calculation.
+        Despite the updates, the results should remain unaffected as the prices
+        for these services/items are sourced from the pricelist detail's state at the time of
+        coalse(claim.dateto, claim.datefrom).
+        '''
+        insuree = create_test_insuree()
+        self.assertIsNotNone(insuree)
+        product = create_test_product("VISIT", custom_props={})
+        policy = create_test_policy(product, insuree, link=True)
+        service = create_test_service("V", custom_props={})
+        item = create_test_item("D", custom_props={})
+        product_service = create_test_product_service(product, service)
+        product_item = create_test_product_item(product, item)
+        pricelist_detail1 = add_service_to_hf_pricelist(service)
+        pricelist_detail2 = add_item_to_hf_pricelist(item)
+
+        claim1 = create_test_claim({"insuree_id": insuree.id})
+        service1 = create_test_claimservice(
+            claim1, custom_props={"service_id": service.id})
+        item1 = create_test_claimitem(
+            claim1, "D", custom_props={"item_id": item.id})
+        errors = validate_claim(claim1, True)
+        errors += validate_assign_prod_to_claimitems_and_services(claim1)
+        update_pricelist_service_detail_in_hf_pricelist(pricelist_detail1, custom_props={"price_overrule": 21})
+        update_pricelist_item_detail_in_hf_pricelist(pricelist_detail1, custom_props={"price_overrule": 37})
+        errors += process_dedrem(claim1, -1, True)
+        self.assertEqual(len(errors), 0)
+
+        # Then
+        claim1.refresh_from_db()
+        item1.refresh_from_db()
+        service1.refresh_from_db()
+        self.assertEqual(len(errors), 0)
+        self.assertEqual(item1.price_adjusted, 100)
+        self.assertEqual(item1.price_valuated, 700)
+        self.assertEqual(item1.deductable_amount, 0)
+        self.assertEqual(item1.exceed_ceiling_amount, 0)
+        self.assertIsNone(item1.exceed_ceiling_amount_category)
+        self.assertEqual(item1.remunerated_amount, 700)
+        self.assertEqual(claim1.status, Claim.STATUS_VALUATED)
+        self.assertEqual(claim1.audit_user_id_process, -1)
+        self.assertIsNotNone(claim1.process_stamp)
+        self.assertIsNotNone(claim1.date_processed)
+
+        dedrem_qs = ClaimDedRem.objects.filter(claim=claim1)
+        self.assertEqual(dedrem_qs.count(), 1)
+        dedrem1 = dedrem_qs.first()
+        self.assertEqual(dedrem1.policy_id, item1.policy_id)
+        self.assertEqual(dedrem1.insuree_id, claim1.insuree_id)
+        self.assertEqual(dedrem1.audit_user_id, -1)
+        self.assertEqual(dedrem1.ded_g, 0)
+        self.assertEqual(dedrem1.rem_g, 1400)
+        self.assertEqual(dedrem1.rem_op, 1400)
+        self.assertIsNone(dedrem1.rem_ip)
+        self.assertEqual(dedrem1.rem_surgery, 0)
+        self.assertEqual(dedrem1.rem_consult, 0)
+        self.assertEqual(dedrem1.rem_hospitalization, 0)
+        self.assertIsNotNone(claim1.validity_from)
+        self.assertIsNone(claim1.validity_to)
+
+        # tearDown
+        dedrem_qs.delete()
+        service1.delete()
+        item1.delete()
+        claim1.delete()
+        policy.insuree_policies.first().delete()
+        policy.delete()
+        product_item.delete()
+        product_service.delete()
+        pricelist_detail1.delete()
+        pricelist_detail2.delete()
+        service.delete()
+        item.delete()
+        product.delete()
+
+    def test_set_status(self):
+        class DummyUser:
+            id_for_audit=-1
+        insuree = create_test_insuree()
+        officer = create_test_officer(villages=[insuree.current_village or insuree.family.location])
+        claim = create_test_claim(custom_props={'status':Claim.STATUS_CHECKED, 
+                                                'insuree':insuree})
+        restult =set_claims_status([claim.uuid], 'feedback_status', Claim.FEEDBACK_SELECTED, user = DummyUser())
+        claim.refresh_from_db()
+        self.assertEqual(claim.feedback_status, Claim.FEEDBACK_SELECTED)
     
     def test_submit_claim_with_different_packatypes(self):
         insuree = create_test_insuree()

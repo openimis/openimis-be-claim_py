@@ -1,12 +1,12 @@
 import graphene
 from enum import Enum
 
-from core.models import Officer
+from core.models import Officer, MutationLog
 from insuree.models import Insuree
-from location.models import HealthFacility, Location
+from location.models import HealthFacility, Location, LocationManager
 from .services import check_unique_claim_code
 import django
-from core.schema import signal_mutation_module_validate
+from core.schema import signal_mutation_module_validate, signal_mutation_module_after_mutating
 from django.db.models import OuterRef, Subquery, Avg, Q
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
@@ -32,7 +32,9 @@ class Query(graphene.ObjectType):
         items=graphene.List(of_type=graphene.String),
         services=graphene.List(of_type=graphene.String),
         json_ext=graphene.JSONString(),
-        attachment_status=graphene.Int(required=False)
+        attachment_status=graphene.Int(required=False),
+        care_type=graphene.String(required=False),
+        show_restored=graphene.Boolean(required=False)
     )
 
     claim = graphene.Field(
@@ -60,6 +62,19 @@ class Query(graphene.ObjectType):
         graphene.Boolean,
         claim_code=graphene.String(required=True),
         description="Checks that the specified claim code is unique."
+    )
+    fsp_from_claim = graphene.Field(
+        HealthFacilityGQLType,
+        insuree_code=graphene.String(required=True),
+        date_claimed=graphene.Date(required=True),
+        description="Return FSP of insuree during creation of the claim."
+    )
+
+    claim_with_same_diagnosis = OrderedDjangoFilterConnectionField(
+        ClaimGQLType,
+        icd=graphene.String(required=True),
+        chfid=graphene.String(required=True),
+        description="Return last claim (date claimed) with identical diagnosis for given insuree."
     )
 
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
@@ -101,11 +116,15 @@ class Query(graphene.ObjectType):
             and settings.ROW_SECURITY
         ):
             raise PermissionDenied(_("unauthorized"))
-        query = Claim.objects
+        query = Claim.objects.all()
         code_is_not = kwargs.get("code_is_not", None)
         if code_is_not:
             query = query.exclude(code=code_is_not)
         variance = kwargs.get("diagnosisVariance", None)
+
+        show_restored = kwargs.get("show_restored", None)
+        if show_restored:
+            query = query.filter(restore__isnull=False)
 
         items = kwargs.get("items", None)
         services = kwargs.get("services", None)
@@ -127,6 +146,11 @@ class Query(graphene.ObjectType):
             query = query.filter(attachments__isnull=False)
         elif attachment_status == AttachmentStatusEnum.WITHOUT.value:
             query = query.filter(attachments__isnull=True)
+
+        care_type = kwargs.get("care_type", None)
+
+        if care_type:
+            query = query.filter(care_type=care_type)
 
         json_ext = kwargs.get("json_ext", None)
 
@@ -156,12 +180,10 @@ class Query(graphene.ObjectType):
                 )
                 variance_filter = variance_filter | ~Q(icd__code__in=diags)
             query = query.filter(variance_filter)
-
-        from location.models import Location
-        user_districts = UserDistrict.get_user_districts(info.context.user._u)
-        query = query.filter(
-            Q(health_facility__location__in=Location.objects.filter(uuid__in=user_districts.values_list('location__uuid', flat=True))) | Q(
-                health_facility__location__in=Location.objects.filter(uuid__in=user_districts.values_list('location__parent__uuid', flat=True))))
+        #filtered already in get_queryser
+        #query = query.filter(
+        #            LocationManager().build_user_location_filter_query( info.context.user._u, prefix='health_facility__location') 
+        #        )
 
         return gql_optimizer.query(query.all(), info)
 
@@ -185,11 +207,13 @@ class Query(graphene.ObjectType):
         region_uuid = kwargs.get('region_uuid', None)
         if district_uuid is not None:
             hf_filters += [Q(location__uuid=district_uuid)]
-        if region_uuid is not None:
+        elif region_uuid is not None:
             hf_filters += [Q(location__parent__uuid=region_uuid)]
         if settings.ROW_SECURITY:
-            dist = UserDistrict.get_user_districts(info.context.user._u)
-            hf_filters += [Q(location__id__in=[l.location_id for l in dist])]
+            q = LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location', loc_types=['D'])
+            if q:
+                hf_filters += [q]
+
         user_health_facility = HealthFacility.objects.filter(*hf_filters)
 
         filters = [*filter_validity(**kwargs)]
@@ -215,6 +239,24 @@ class Query(graphene.ObjectType):
                 | Q(last_name__icontains=search)
                 | Q(other_names__icontains=search)
             )
+        return qs
+
+    def resolve_fsp_from_claim(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
+            raise PermissionDenied(_("unauthorized"))
+        result = Insuree.objects.filter(
+            chf_id=kwargs['insuree_code'],
+            *filter_validity(validity=kwargs['date_claimed']),
+        ).first().health_facility
+        return result
+
+    def resolve_claim_with_same_diagnosis(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+        qs = Claim.objects.filter(icd__code=kwargs['icd'], icd__validity_to__isnull=True,
+                                  insuree__chf_id=kwargs['chfid'], insuree__validity_to__isnull=True,
+                                  validity_to__isnull=True).order_by("date_claimed")
         return qs
 
 
@@ -252,5 +294,24 @@ def on_claim_mutation(sender, **kwargs):
     return []
 
 
+def on_claim_after_mutation(sender, **kwargs):
+    if kwargs.get('error_messages', None):
+        return []
+    elif kwargs.get('mutation_class', None) != 'CreateClaimMutation':
+        return []
+    if 'data' in kwargs and kwargs['data'].get('autogenerate'):
+        try:
+            mutation_client_id = kwargs.get('data')['client_mutation_id']
+            mutation_log = MutationLog.objects.filter(client_mutation_id=mutation_client_id).first()
+            mutation_log.client_mutation_label = kwargs['data']['client_mutation_label']
+            mutation_log.autogenerated_code = kwargs['data']['code']
+            mutation_log.save()
+            return []
+        except KeyError as e:
+            logger.error("Client Mutation ID not found in claim signal after mutation, error: ", e)
+    return []
+
+
 def bind_signals():
     signal_mutation_module_validate["claim"].connect(on_claim_mutation)
+    signal_mutation_module_after_mutating["claim"].connect(on_claim_after_mutation)

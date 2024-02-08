@@ -124,8 +124,8 @@ class ClaimGQLType(DjangoObjectType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        claim_ids = Claim.get_queryset(queryset, info).values('uuid').all()
-        return Claim.objects.filter(uuid__in=claim_ids)
+        return Claim.get_queryset(queryset, info).all()
+
 
 
 class ClaimAttachmentGQLType(DjangoObjectType):
@@ -141,6 +141,7 @@ class ClaimAttachmentGQLType(DjangoObjectType):
             "date": ["exact", "lt", "lte", "gt", "gte"],
             "filename": ["exact", "icontains"],
             "mime": ["exact", "icontains"],
+            "general_type": ["exact", "icontains"],
             "url": ["exact", "icontains"],
             **prefix_filterset("claim__", ClaimGQLType._meta.filter_fields),
         }
