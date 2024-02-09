@@ -1155,8 +1155,6 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         if claim_detail.service.packagetype == 'P':
                             service_services = ServiceService.objects.filter(servicelinkedService=claim_detail.service.id).all()
                             claim_service_services = ClaimServiceService.objects.filter(claimlinkedService=claim_detail.id).all()
-                            print("serviceservices ", service_services)
-                            print("claim services ", claim_service_services)
                             if len(service_services) == len(claim_service_services):
                                 for servservice in service_services:
                                     for claimserviceservice in claim_service_services:
@@ -1199,7 +1197,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                     except:
                         print("This is a ClaimItem element, not a ClaimService")
 
-            work_value = itemsvc_quantity * set_price_adjusted
+            work_value = int(itemsvc_quantity * set_price_adjusted)
 
             if claim_detail.limitation == ProductItemOrService.LIMIT_FIXED_AMOUNT \
                     and claim_detail.limitation_value \

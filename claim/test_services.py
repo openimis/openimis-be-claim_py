@@ -364,8 +364,4 @@ class ClaimSubmitServiceTestCase(TestCase):
                 "validity_to": self.test_claim_service.validity_to, 
                 "audit_user_id": self.test_claim_service.audit_user_id
             }]
-
-            # "qty_provided": 7, "price_asked": 11, "service_id": 23,  # Skin graft, no cat
-            #     "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
-            #     "serviceLinked": [], "serviceserviceSet": []
         }

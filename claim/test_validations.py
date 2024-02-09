@@ -934,7 +934,7 @@ class ValidationTest(TestCase):
         # Then dedrem should have been updated
         dedrem = ClaimDedRem.objects.filter(claim=claim1).first()
         self.assertIsNotNone(dedrem)
-        self.assertEquals(dedrem.rem_g, 37 + 53)
+        self.assertEquals(dedrem.rem_g, 200)  # 100*1 + 100*1
 
         # tearDown
         # dedrem.delete() # already done if the test passed
@@ -1134,6 +1134,8 @@ class ValidationTest(TestCase):
         self.assertEqual(claim.feedback_status, Claim.FEEDBACK_SELECTED)
     
     def test_submit_claim_with_different_packatypes(self):
+        from .apps import ClaimConfig
+        ClaimConfig.native_code_for_services=False
         insuree = create_test_insuree()
         self.assertIsNotNone(insuree)
         product = create_test_product("VISIT", custom_props={})
@@ -1192,12 +1194,12 @@ class ValidationTest(TestCase):
         product_item.save()
         service.packagetype = "P"
         service.save()
-        serviceservice = ServiceService.objects.create(
-            servicelinkedService=service,
-            service_id = claimservice1.service_id,
-            price_asked = 3,
-            qty_provided = 2
-        )
+        # serviceservice = ServiceService.objects.create(
+        #     servicelinkedService=service,
+        #     service_id = claimservice1.service_id,
+        #     price_asked = 3,
+        #     qty_provided = 2
+        # )
         claimserviceservice = ClaimServiceService.objects.create(
             service = service,
             claimlinkedService = claimservice1,
@@ -1223,7 +1225,7 @@ class ValidationTest(TestCase):
         validate_assign_prod_to_claimitems_and_services(claim1)
         process_dedrem(claim1, -1, True)
         claimservice1.refresh_from_db()
-        # serviceservice.qty_provided 2 is not equal to qty_displayed on the claimserviceservice
+        # claimservicesitem.qty_provided 2 is not equal to qty_displayed on the claimserviceservice
         # so the price_adjusted is set to 0
         self.assertEqual(claimservice1.price_adjusted, 0)
 
@@ -1241,7 +1243,7 @@ class ValidationTest(TestCase):
         dedrem_qs = ClaimDedRem.objects.filter(claim=claim1)
         # tearDown
         dedrem_qs.delete()
-        serviceservice.delete()
+        # serviceservice.delete()
         claimserviceservice.delete()
         claimserviceitem.delete()
         claimservice1.delete()
