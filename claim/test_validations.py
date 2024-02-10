@@ -1259,3 +1259,4 @@ class ValidationTest(TestCase):
         service.delete()
         item.delete()
         product.delete()
+        ClaimConfig.native_code_for_services=True
