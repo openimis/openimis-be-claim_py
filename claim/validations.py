@@ -1138,15 +1138,15 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         if claim_detail.service.packagetype == 'F':
                             service_price = claim_detail.service.price
                             if claim_detail.price_adjusted is not None:
-                                print("compare ", claim_detail.price_adjusted, " and ", service_price)
+                                logger.debug(f"compare {claim_detail.price_adjusted} and {service_price}")
                                 if claim_detail.price_adjusted > service_price:
                                     set_price_adjusted = service_price
                             else:
-                                print("compare ", claim_detail.price_asked, " and ", service_price)
+                                logger.debug(f"compare {claim_detail.price_asked} and {service_price}")
                                 if claim_detail.price_asked > service_price:
                                     set_price_adjusted = service_price
                     except:
-                        print("This it an item element")
+                        logger.debug("This it an item element")
             else:
                 set_price_adjusted = pl_price
                 if ClaimConfig.native_code_for_services == False:
@@ -1159,8 +1159,8 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                                 for servservice in service_services:
                                     for claimserviceservice in claim_service_services:
                                         if servservice.service.id == claimserviceservice.service.id:
-                                            print("comparing serviceservice qty ", servservice.qty_provided,
-                                            " and claimserviceservice qty ", claimserviceservice.qty_displayed)
+                                            logger.debug(f"comparing serviceservice qty {servservice.qty_provided}\
+                                                and claimserviceservice qty {claimserviceservice.qty_displayed}")
                                             if servservice.qty_provided != claimserviceservice.qty_displayed:
                                                 set_price_adjusted = 0
                                                 contunue_service_check = False
@@ -1171,19 +1171,19 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                                 # user misconfiguration !
                                 set_price_adjusted = 0
                                 contunue_service_check = False
-                            print("set_price_adjusted after service check ", set_price_adjusted)
+                            logger.debug(f"set_price_adjusted after service check {set_price_adjusted}")
                             if contunue_service_check:
                                 contunue_item_check = True
                                 service_items = ServiceItem.objects.filter(servicelinkedItem=claim_detail.service.id).all()
                                 claim_service_items = ClaimServiceItem.objects.filter(claimlinkedItem=claim_detail.id).all()
-                                print("service_items: ", service_items)
-                                print("claim_service_items: ", claim_service_items)
+                                logger.debug(f"service_items: {service_items}")
+                                logger.debug(f"claim_service_items: {claim_service_items}")
                                 if len(service_items) == len(claim_service_items):
                                     for serviceitem in service_items:
                                         for claimservicesitem in claim_service_items:
                                             if serviceitem.item.id == claimservicesitem.item.id:
-                                                print("comparing serviceitem qty ", serviceitem.qty_provided,
-                                                " and claimservicesitem qty ", claimservicesitem.qty_displayed)
+                                                logger.debug(f"comparing serviceitem qty {serviceitem.qty_provided}\
+                                                 and claimservicesitem qty {claimservicesitem.qty_displayed}")
                                                 if serviceitem.qty_provided != claimservicesitem.qty_displayed:
                                                     set_price_adjusted = 0
                                                     contunue_item_check = False
@@ -1193,9 +1193,9 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                                 else:
                                     # user misconfiguration !
                                     set_price_adjusted = 0
-                                print("set_price_adjusted after items check ", set_price_adjusted)
+                                logger.debug(f"set_price_adjusted after items check {set_price_adjusted}")
                     except:
-                        print("This is a ClaimItem element, not a ClaimService")
+                        logger.debug("This is a ClaimItem element, not a ClaimService")
 
             work_value = int(itemsvc_quantity * set_price_adjusted)
 

@@ -360,7 +360,7 @@ class ClaimCreateService:
     def _create_claim_from_dict(self, claim_submit_data):
         items = claim_submit_data.pop('items', [])
         services = claim_submit_data.pop('services', [])
-        claim_submit_data.pop('serviceLinked', [])
+        claim_submit_data.pop('serviceItemSet', [])
         claim_submit_data.pop('serviceserviceSet', [])
         claim = Claim.objects.create(**claim_submit_data)
         self.__process_items(claim, items, services)

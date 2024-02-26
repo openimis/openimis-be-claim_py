@@ -153,7 +153,7 @@ class ClaimGraphQLTestCase(GraphQLTestCase):
                 priceAsked: "10.00"
                 qtyProvided: "1.00"
                 status: 1,
-                serviceLinked: [],
+                serviceItemSet: [],
                 serviceserviceSet: []
             }}
                 ]

@@ -293,7 +293,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         service_items_dict = {
             "qty_provided": 7, "price_asked": 11, "service_id": 23,
             "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
-            "serviceLinked": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
+            "serviceItemSet": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
             "serviceserviceSet": [{"subServiceCode": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
         }
         service_create_hook(claim.id, service_items_dict)
@@ -311,7 +311,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         self.assertEquals(claim_service_service.qty_provided, 3)
         self.assertEquals(claim_service_service.price_asked, 20)
 
-        service_items_dict["serviceLinked"] = [{"qty_asked": 90, "subItemCode": item.code}]
+        service_items_dict["serviceItemSet"] = [{"qty_asked": 90, "subItemCode": item.code}]
         service_items_dict["serviceserviceSet"] = [{"qty_asked": 100, "subServiceCode": service.code}]
             
         service_update_hook(claim.id, service_items_dict)
@@ -327,7 +327,7 @@ class ClaimSubmitServiceTestCase(TestCase):
         service_items_dict = {
             "qty_provided": 5, "price_asked": 50, "service_id": 23,
             "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
-            "serviceLinked": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
+            "serviceItemSet": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
             "serviceserviceSet": [{"subServiceCode": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
         }
         result = calcul_amount_service(service_items_dict)
