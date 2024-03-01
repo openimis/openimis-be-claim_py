@@ -11,7 +11,7 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
     if __check_if_maximum_amount_overshoot(data_children, children):
         raise ValidationError(_("mutation.claim_item_service_maximum_amount_overshoot"))
     for data_elt in data_children:
-        if ClaimConfig.native_code_for_services == False:
+        if not ClaimConfig.native_code_for_services:
             if create_hook==service_create_hook :
                 claimed += calcul_amount_service(data_elt)
             else:

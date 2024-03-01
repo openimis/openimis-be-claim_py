@@ -1133,7 +1133,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                 set_price_adjusted = claim_detail.price_approved
             if claim_detail.price_origin == ProductItemOrService.ORIGIN_CLAIM:
                 set_price_adjusted = claim_detail.price_asked
-                if ClaimConfig.native_code_for_services == False:
+                if not ClaimConfig.native_code_for_services:
                     try:
                         if claim_detail.service.packagetype == 'F':
                             service_price = claim_detail.service.price
@@ -1149,7 +1149,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                         logger.debug("This it an item element")
             else:
                 set_price_adjusted = pl_price
-                if ClaimConfig.native_code_for_services == False:
+                if not ClaimConfig.native_code_for_services:
                     try:
                         contunue_service_check = True
                         if claim_detail.service.packagetype == 'P':
@@ -1165,7 +1165,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                                                 set_price_adjusted = 0
                                                 contunue_service_check = False
                                                 break
-                                    if contunue_service_check == False:
+                                    if not contunue_service_check:
                                         break
                             else:
                                 # user misconfiguration !
@@ -1188,7 +1188,7 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
                                                     set_price_adjusted = 0
                                                     contunue_item_check = False
                                                     break
-                                        if contunue_item_check == False:
+                                        if not contunue_item_check:
                                             break
                                 else:
                                     # user misconfiguration !
