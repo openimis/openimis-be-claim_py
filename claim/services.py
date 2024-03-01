@@ -24,8 +24,9 @@ from .validations import validate_claim, validate_assign_prod_to_claimitems_and_
 from django.db.models import Subquery, F, OuterRef, Sum, FloatField
 from django.db.models.functions import Coalesce
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError, ObjectDoesNotExist
 logger = logging.getLogger(__name__)
+
 
 @core.comparable
 class ClaimElementSubmit(object):
@@ -473,7 +474,8 @@ def claim_create_items_and_services(claim, data, user):
     claimed += process_services_relations(user, claim, services)
     claim.claimed = claimed
     claim.save()
-    
+
+
 def update_or_create_claim(data, user):
          
     validate_claim_data(data, user)
@@ -487,7 +489,8 @@ def update_or_create_claim(data, user):
     else:
         claim = claim_create(data, user)
     return claim
-    
+
+
 def validate_claim_data(data, user):
     services = data.get('services') if 'services' in data else []
     incoming_code = data.get('code')
@@ -495,8 +498,6 @@ def validate_claim_data(data, user):
     restore = data.get('restore', None)
     current_claim = Claim.objects.filter(uuid=claim_uuid).first()
     current_code = current_claim.code if current_claim else None
-    
- 
 
     if restore:
         restored_qs = Claim.objects.filter(uuid=restore)
@@ -530,6 +531,7 @@ def validate_claim_data(data, user):
     if not restore and current_code != incoming_code and check_unique_claim_code(incoming_code):
         raise ValidationError(_("mutation.code_name_duplicated"))
 
+
 def validate_number_of_additional_diagnoses(incoming_data):
     additional_diagnoses_count = 0
     for key in incoming_data.keys():
@@ -537,6 +539,7 @@ def validate_number_of_additional_diagnoses(incoming_data):
             additional_diagnoses_count += 1
 
     return additional_diagnoses_count <= ClaimConfig.additional_diagnosis_number_allowed
+
 
 def submit_claim(claim, user):
     c_errors = []
@@ -553,6 +556,7 @@ def submit_claim(claim, user):
     c_errors += set_claim_submitted(claim, c_errors, user)
     logger.debug("SubmitClaimsMutation: claim %s set submitted", claim.uuid)
     return c_errors
+
 
 def set_claim_submitted(claim, errors, user):
     try:
@@ -594,6 +598,7 @@ def validate_and_process_dedrem_claim(claim, user, is_process):
         errors += set_claim_processed_or_valuated(claim, errors, user)
     return errors
 
+
 def set_claim_processed_or_valuated(claim, errors, user):
     try:
         if errors:
@@ -617,6 +622,7 @@ def set_claim_processed_or_valuated(claim, errors, user):
                 error['list'].append(arg)
         return [error]
 
+
 def details_with_relative_prices(details):
     return details.filter(status=ClaimDetail.STATUS_PASSED) \
         .filter(price_origin=ProductItemOrService.ORIGIN_RELATIVE) \
@@ -625,6 +631,7 @@ def details_with_relative_prices(details):
 
 def with_relative_prices(claim):
     return details_with_relative_prices(claim.items) or details_with_relative_prices(claim.services)
+
 
 def set_claims_status(uuids, field, status, audit_data=None, user=None):
     errors = []
@@ -700,7 +707,6 @@ def create_feedback_prompt(current_claim, user):
     FeedbackPrompt.objects.create(
         **feedback_prompt
     )
-
 
 
 def set_feedback_prompt_validity_to_to_current_date(claim_uuid):

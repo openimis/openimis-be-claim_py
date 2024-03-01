@@ -1,4 +1,6 @@
 import logging
+import os
+import urllib.parse
 import uuid
 import pathlib
 import base64
@@ -25,7 +27,9 @@ from graphene import InputObjectType
 
 from claim.gql_queries import ClaimGQLType
 from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, \
-    ClaimDedRem, GeneralClaimAttachmentType, ClaimServiceItem ,ClaimServiceService
+    ClaimDedRem, GeneralClaimAttachmentType, ClaimAttachmentType,ClaimServiceService
+from claim.attachment_strategies import *
+
 from product.models import ProductItemOrService
 from medical.models import Item, Service
 
@@ -36,6 +40,7 @@ from claim.services import validate_claim_data as service_validate_claim_data, \
             create_feedback_prompt as service_create_feedback_prompt,\
                 set_feedback_prompt_validity_to_to_current_date, set_claims_status
 from django.db import transaction
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +200,7 @@ class BaseAttachment:
     filename = graphene.String(required=False)
     mime = graphene.String(required=False)
     general_type = graphene.String(required=False)
+    predefined_type = graphene.String(required=False)
     url = graphene.String(required=False)
 
 
@@ -293,10 +299,17 @@ def create_attachment(claim_id, data):
         if (ClaimConfig.allowed_domains_attachments and
                 not any(domain in parsed_url.path for domain in ClaimConfig.allowed_domains_attachments)):
             raise ValidationError(_("mutation.attachment_url_domain_not_allowed"))
+        if data['predefined_type'] in attachment_strategies_dict:
+            data['url'] = attachment_strategies_dict[data['predefined_type']].handler(data)
+            data['document'] = data['url']
+        data['predefined_type'] = ClaimAttachmentType.objects.get(validity_to__isnull=True, claim_general_type="URL",
+                                                                  claim_attachment_type=data['predefined_type'])
     elif general_type == GeneralClaimAttachmentType.FILE:
         if ClaimConfig.claim_attachments_root_path:
             # don't use data date as it may be updated by user afterwards!
             data['url'] = create_file(now, claim_id, data.pop('document'))
+        data['predefined_type'] = ClaimAttachmentType.objects.get(validity_to__isnull=True, claim_general_type="FILE",
+                                                                  claim_attachment_type=data['predefined_type'])
     else:
         raise ValidationError(_("mutation.attachment_general_type_incorrect"))
     data['validity_from'] = now
@@ -431,7 +444,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
                 raise PermissionDenied(_("unauthorized"))
             queryset = ClaimAttachment.objects.filter(*filter_validity())
             if settings.ROW_SECURITY:
-                from location.schema import  LocationManager
+                from location.schema import LocationManager
                 queryset = LocationManager().build_user_location_filter_query( user._u, prefix='claim__health_facility__location', queryset = queryset.select_related("claim"), loc_types=['D'])
 
             attachment = queryset \
@@ -439,6 +452,28 @@ class UpdateAttachmentMutation(OpenIMISMutation):
                 .first()
             if not attachment:
                 raise PermissionDenied(_("unauthorized"))
+            general_type = data['general_type']
+            data['module'] = 'claim'
+            from core import datetime
+            now = datetime.datetime.now()
+            if general_type == GeneralClaimAttachmentType.URL:
+                parsed_url = urlparse(data['url'])
+                if (ClaimConfig.allowed_domains_attachments and
+                        not any(domain in parsed_url.path for domain in ClaimConfig.allowed_domains_attachments)):
+                    raise ValidationError(_("mutation.attachment_url_domain_not_allowed"))
+                if data['predefined_type'] in attachment_strategies_dict:
+                    data['url'] = attachment_strategies_dict[data['predefined_type']](data)
+                    data['document'] = data['url']
+                data['predefined_type'] = ClaimAttachmentType.objects.get(validity_to__isnull=True,
+                                                                          claim_general_type="URL",
+                                                                          claim_attachment_type=data['predefined_type'])
+            elif general_type == GeneralClaimAttachmentType.FILE:
+                if ClaimConfig.claim_attachments_root_path:
+                    # don't use data date as it may be updated by user afterwards!
+                    data['url'] = create_file(now, claim_id, data.pop('document'))
+                data['predefined_type'] = ClaimAttachmentType.objects.get(validity_to__isnull=True,
+                                                                          claim_general_type="FILE",
+                                                                          claim_attachment_type=data['predefined_type'])
             attachment.save_history()
             data['audit_user_id'] = user.id_for_audit
             [setattr(attachment, key, data[key]) for key in data]

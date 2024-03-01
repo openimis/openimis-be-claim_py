@@ -8,7 +8,8 @@ from location.schema import HealthFacilityGQLType
 from medical.schema import DiagnosisGQLType
 from claim_batch.schema import BatchRunGQLType
 from .apps import ClaimConfig
-from .models import ClaimDedRem, Claim, ClaimAdmin, Feedback, ClaimItem, ClaimService, ClaimAttachment, ClaimServiceService, ClaimServiceItem
+from claim.models import (ClaimDedRem, Claim, ClaimAdmin, Feedback, ClaimItem, ClaimService, ClaimAttachment,
+                          ClaimAttachmentType, ClaimServiceService, ClaimServiceItem)
 from django.utils.translation import gettext as _
 from django.core.exceptions import PermissionDenied
 
@@ -132,7 +133,6 @@ class ClaimGQLType(DjangoObjectType):
         return Claim.get_queryset(queryset, info).all()
 
 
-
 class ClaimAttachmentGQLType(DjangoObjectType):
     doc = graphene.String()
 
@@ -156,6 +156,17 @@ class ClaimAttachmentGQLType(DjangoObjectType):
     def get_queryset(cls, queryset, info):
         queryset = queryset.filter(*filter_validity())
         return queryset
+
+
+class ClaimAttachmentTypeGQLType(DjangoObjectType):
+    class Meta:
+        model = ClaimAttachmentType
+        interfaces = (graphene.relay.Node,)
+        filter_fields = {
+            "id": ["exact"],
+            "claim_general_type": ["exact"]
+        }
+        connection_class = ExtendedConnection
 
 
 class FeedbackGQLType(DjangoObjectType):

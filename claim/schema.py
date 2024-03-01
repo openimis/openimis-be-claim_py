@@ -79,6 +79,10 @@ class Query(graphene.ObjectType):
         description="Return last claim (date claimed) with identical diagnosis for given insuree."
     )
 
+    claim_attachment_type = DjangoFilterConnectionField(
+        ClaimAttachmentTypeGQLType
+    )
+
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_mutation_create_claims_perms)\
                 and not info.context.user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
