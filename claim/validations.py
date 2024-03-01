@@ -112,32 +112,31 @@ def validate_claim(claim, check_max):
 def validate_claimitems(claim):
     errors = []
     target_date = claim.date_from if claim.date_from else claim.date_to
-    for claimitem in claim.items \
-            .filter(validity_to__isnull=True) \
-            .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True)):
-        errors += validate_claimitem_validity(claim, claimitem)
+    for claimitem in claim.items.all():
         if not claimitem.rejection_reason:
-            errors += validate_claimitem_in_price_list(claim, claimitem)
-        if not claimitem.rejection_reason:
-            errors += validate_claimdetail_care_type(claim, claimitem)
-        if not claimitem.rejection_reason:
-            errors += validate_claimdetail_limitation_fail(claim, claimitem)
-        if not claimitem.rejection_reason:
-            errors += validate_claimitem_frequency(claim, claimitem)
-        if not claimitem.rejection_reason:
-            errors += validate_item_product_family(
-                claimitem=claimitem,
-                target_date=target_date,
-                item=claimitem.item,
-                insuree_id=claim.insuree_id,
-                adult=claim.insuree.is_adult(target_date)
-            )
-        if claimitem.rejection_reason:
-            claimitem.status = ClaimItem.STATUS_REJECTED
-        else:
-            claimitem.rejection_reason = 0
-            claimitem.status = ClaimItem.STATUS_PASSED
-        claimitem.save()
+            errors += validate_claimitem_validity(claim, claimitem)
+            if not claimitem.rejection_reason:
+                errors += validate_claimitem_in_price_list(claim, claimitem)
+            if not claimitem.rejection_reason:
+                errors += validate_claimdetail_care_type(claim, claimitem)
+            if not claimitem.rejection_reason:
+                errors += validate_claimdetail_limitation_fail(claim, claimitem)
+            if not claimitem.rejection_reason:
+                errors += validate_claimitem_frequency(claim, claimitem)
+            if not claimitem.rejection_reason:
+                errors += validate_item_product_family(
+                    claimitem=claimitem,
+                    target_date=target_date,
+                    item=claimitem.item,
+                    insuree_id=claim.insuree_id,
+                    adult=claim.insuree.is_adult(target_date)
+                )
+            if claimitem.rejection_reason:
+                claimitem.status = ClaimItem.STATUS_REJECTED
+            else:
+                claimitem.rejection_reason = 0
+                claimitem.status = ClaimItem.STATUS_PASSED
+            claimitem.save()
     return errors
 
 
@@ -146,34 +145,33 @@ def validate_claimservices(claim):
     target_date = claim.date_from if claim.date_from else claim.date_to
     base_category = get_claim_category(claim)
 
-    for claimservice in claim.services \
-            .filter(validity_to__isnull=True) \
-            .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True)):
-        errors += validate_claimservice_validity(claim, claimservice)
+    for claimservice in claim.services.all():
         if not claimservice.rejection_reason:
-            errors += validate_claimservice_in_price_list(claim, claimservice)
-        if not claimservice.rejection_reason:
-            errors += validate_claimdetail_care_type(claim, claimservice)
-        if not claimservice.rejection_reason:
-            errors += validate_claimservice_frequency(claim, claimservice)
-        if not claimservice.rejection_reason:
-            errors += validate_claimdetail_limitation_fail(claim, claimservice)
-        if not claimservice.rejection_reason:
-            errors += validate_service_product_family(
-                claimservice=claimservice,
-                target_date=target_date,
-                service=claimservice.service,
-                insuree_id=claim.insuree_id,
-                adult=claim.insuree.is_adult(target_date),
-                base_category=base_category,
-                claim=claim,
-            )
-        if claimservice.rejection_reason:
-            claimservice.status = ClaimService.STATUS_REJECTED
-        else:
-            claimservice.rejection_reason = 0
-            claimservice.status = ClaimService.STATUS_PASSED
-        claimservice.save()
+            errors += validate_claimservice_validity(claim, claimservice)
+            if not claimservice.rejection_reason:
+                errors += validate_claimservice_in_price_list(claim, claimservice)
+            if not claimservice.rejection_reason:
+                errors += validate_claimdetail_care_type(claim, claimservice)
+            if not claimservice.rejection_reason:
+                errors += validate_claimservice_frequency(claim, claimservice)
+            if not claimservice.rejection_reason:
+                errors += validate_claimdetail_limitation_fail(claim, claimservice)
+            if not claimservice.rejection_reason:
+                errors += validate_service_product_family(
+                    claimservice=claimservice,
+                    target_date=target_date,
+                    service=claimservice.service,
+                    insuree_id=claim.insuree_id,
+                    adult=claim.insuree.is_adult(target_date),
+                    base_category=base_category,
+                    claim=claim,
+                )
+            if claimservice.rejection_reason:
+                claimservice.status = ClaimService.STATUS_REJECTED
+            else:
+                claimservice.rejection_reason = 0
+                claimservice.status = ClaimService.STATUS_PASSED
+            claimservice.save()
     return errors
 
 

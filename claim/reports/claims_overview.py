@@ -1,7 +1,7 @@
 from _decimal import Decimal
 from typing import Dict, Union
 
-from django.db.models import Q
+from django.db.models import Q, Prefetch
 
 from location.models import Location, HealthFacility
 from product.models import Product
@@ -7545,10 +7545,10 @@ def claims_overview_query(user,
     claim_queryset = Claim.objects.filter(claim_filters) \
                                   .distinct("date_claimed", "insuree__chf_id", "code") \
                                   .order_by("date_claimed", "insuree__chf_id", "code") \
-                                  .prefetch_related("items") \
+                                  .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(*filter_validity())))\
                                   .prefetch_related("items__item") \
                                   .prefetch_related("insuree") \
-                                  .prefetch_related("services") \
+                                  .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(*filter_validity())))\
                                   .prefetch_related("services__service") \
                                   .prefetch_related("admin")
 

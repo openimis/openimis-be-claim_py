@@ -35,10 +35,12 @@ class Query(graphene.ObjectType):
         attachment_status=graphene.Int(required=False),
         care_type=graphene.String(required=False),
         show_restored=graphene.Boolean(required=False)
-    )
+        )
 
     claim = graphene.Field(
-        ClaimGQLType, id=graphene.Int(), uuid=graphene.UUID()
+        ClaimGQLType, 
+        id=graphene.Int(), 
+        uuid=graphene.UUID()
     )
 
     claim_attachments = DjangoFilterConnectionField(
@@ -111,52 +113,47 @@ class Query(graphene.ObjectType):
             return Claim.objects.get(uuid=uuid)
 
     def resolve_claims(self, info, **kwargs):
+        class AttachmentStatusEnum(Enum):
+            NONE = 0
+            WITH = 1
+            WITHOUT = 2
         if (
             not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
             and settings.ROW_SECURITY
         ):
             raise PermissionDenied(_("unauthorized"))
-        query = Claim.objects.all()
-        code_is_not = kwargs.get("code_is_not", None)
-        if code_is_not:
-            query = query.exclude(code=code_is_not)
-        variance = kwargs.get("diagnosisVariance", None)
+        query = Claim.objects
+        filters = []
 
         show_restored = kwargs.get("show_restored", None)
         if show_restored:
-            query = query.filter(restore__isnull=False)
+            filters.append(Q(restore__isnull=False))
 
         items = kwargs.get("items", None)
         services = kwargs.get("services", None)
 
         if items:
-            query = query.filter(items__item__code__in=items)
+            filters.append(Q(items__item__code__in=items))
 
         if services:
-            query = query.filter(services__service__code__in=services)
+            filters.append(Q(services__service__code__in=services))
 
         attachment_status = kwargs.get("attachment_status", 0)
-
-        class AttachmentStatusEnum(Enum):
-            NONE = 0
-            WITH = 1
-            WITHOUT = 2
-
         if attachment_status == AttachmentStatusEnum.WITH.value:
-            query = query.filter(attachments__isnull=False)
+            filters.append(Q(attachments__isnull=False))
         elif attachment_status == AttachmentStatusEnum.WITHOUT.value:
-            query = query.filter(attachments__isnull=True)
+            filters.append(Q(attachments__isnull=True))
 
         care_type = kwargs.get("care_type", None)
 
         if care_type:
-            query = query.filter(care_type=care_type)
+            filters.append(Q(care_type=care_type))
 
         json_ext = kwargs.get("json_ext", None)
 
         if json_ext:
-            query = query.filter(json_ext__jsoncontains=json_ext)
-
+            filters.append(Q(json_ext__jsoncontains=json_ext))
+        variance = kwargs.get("diagnosisVariance", None)
         if variance:
             from core import datetime, datetimedelta
 
@@ -178,14 +175,22 @@ class Query(graphene.ObjectType):
                     .values("icd__code")
                     .distinct()
                 )
-                variance_filter = variance_filter | ~Q(icd__code__in=diags)
-            query = query.filter(variance_filter)
+                variance_filter = Q(variance_filter | ~Q(icd__code__in=diags))
+            filters.append(variance_filter)    
         #filtered already in get_queryser
         #query = query.filter(
         #            LocationManager().build_user_location_filter_query( info.context.user._u, prefix='health_facility__location') 
         #        )
-
-        return gql_optimizer.query(query.all(), info)
+        code_is_not = kwargs.get("code_is_not", None)
+        
+        if len(filters):
+            query = query.filter(*filters)   
+        if code_is_not:
+            query = query.exclude(code=code_is_not)
+        
+        if len(filters) == 0 and not code_is_not:
+            query = query.all()
+        return gql_optimizer.query(query, info)
 
     def resolve_claim_attachments(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):

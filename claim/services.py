@@ -628,15 +628,12 @@ def with_relative_prices(claim):
 
 def set_claims_status(uuids, field, status, audit_data=None, user=None):
     errors = []
-    for claim_uuid in uuids:
-        claim = Claim.objects \
-            .filter(uuid=claim_uuid,
-                    validity_to__isnull=True) \
-            .first()
-        if claim is None:
-            errors += [{'message': _(
-                "claim.validation.id_does_not_exist") % {'id': claim_uuid}}]
-            continue
+    claims = Claim.objects \
+            .filter(uuid__in=uuids,
+                    *filter_validity()) 
+    remaining_uuid = list(map(str.upper,uuids))
+    for claim in claims:
+        remaining_uuid.remove(claim.uuid.upper())        
         try:
             claim.save_history()
             setattr(claim, field, status)
@@ -661,6 +658,10 @@ def set_claims_status(uuids, field, status, audit_data=None, user=None):
             elif hasattr(exc, 'args') and len(exc.args):
                 for m in exc.args:
                     errors.append({'message': m })
+        if len(remaining_uuid):
+            errors.append(_(
+                "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})                  
+                        
     return errors
 
 
@@ -717,8 +718,13 @@ def set_feedback_prompt_validity_to_to_current_date(claim_uuid):
 def update_claims_dedrems(uuids, user):
     # We could do it in one query with filter(claim__uuid__in=uuids) but we'd loose the logging
     errors = []
-    for uuid in uuids:
-        logger.debug(f"delivering review on {uuid}, reprocessing dedrem ({user})")
-        claim = Claim.objects.get(uuid=uuid)
+    claims = Claim.objects.filter(uuid__in=uuids)
+    remaining_uuid = list(map(str.upper,uuids))
+    for claim in claims:
+        remaining_uuid.remove(claim.uuid.upper())       
+        logger.debug(f"delivering review on {claim.uuid}, reprocessing dedrem ({user})")
         errors += validate_and_process_dedrem_claim(claim, user, False)
+    if len(remaining_uuid):
+        errors.append(_(
+            "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})
     return errors

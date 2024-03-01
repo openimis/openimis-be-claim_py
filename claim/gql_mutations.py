@@ -8,7 +8,7 @@ from typing import Callable, Dict
 import graphene
 import importlib
 import graphene_django_optimizer
-from django.db.models import Count, Case, When, IntegerField, Q
+from django.db.models import Count, Case, When, IntegerField, Q, Prefetch
 
 from core.models import MutationLog, Officer
 from .apps import ClaimConfig
@@ -563,22 +563,27 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         uuids = data.get("uuids", [])
         client_mutation_id = data.get("client_mutation_id", None)
         c_errors = []
-        for claim_uuid in uuids:
-            claim = Claim.objects \
-                .filter(uuid=claim_uuid,
+        claims = Claim.objects \
+                .filter(uuid__in=uuids,
                         validity_to__isnull=True) \
-                .prefetch_related("items") \
-                .prefetch_related("services") \
-                .first()
-            if claim is None:
-                c_errors.append( {'code': REJECTION_REASON_INVALID_CLAIM,
-                            'message': _("claim.validation.claim_uuid_not_found") })
+            .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(
+                *filter_validity(), 
+                Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))))) \
+            .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(
+                *filter_validity(),
+                Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))))) 
+        remaining_uuid = list(map(str.upper,uuids))
+        for claim in claims:
+            remaining_uuid.remove(claim.uuid.upper())
             c_errors += submit_claim(claim, user)
             if c_errors:
                 errors.append({
                     'title': claim.code,
                     'list': c_errors
                 })
+        if len(remaining_uuid):
+            c_errors.append( {'code': REJECTION_REASON_INVALID_CLAIM,
+                            'message': _("claim.validation.claim_uuid_not_found") + ','.join(remaining_uuid) })
         if len(errors) == 1:
             errors = errors[0]['list']
         cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
@@ -889,21 +894,17 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         errors = []
         uuids = data.get("uuids", None)
         client_mutation_id = data.get("client_mutation_id", None)
-        for claim_uuid in uuids:
+        claims = Claim.objects \
+                .filter(uuid_in=uuids) \
+                .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(*filter_validity())))\
+                .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(*filter_validity())))
+        remaining_uuid = list(map(str.upper,uuids))
+        for claim in claims:
+            remaining_uuid.remove(claim.uuid.upper())
+            
             logger.debug("ProcessClaimsMutation: processing %s", claim_uuid)
             c_errors = []
-            claim = Claim.objects \
-                .filter(uuid=claim_uuid) \
-                .prefetch_related("items") \
-                .prefetch_related("services") \
-                .first()
-            if claim is None:
-                errors += {
-                    'title': claim_uuid,
-                    'list': [{'message': _(
-                        "claim.validation.id_does_not_exist") % {'id': claim_uuid}}]
-                }
-                continue
+     
             claim.save_history()
             claim.audit_user_id_process = user.id_for_audit
             logger.debug("ProcessClaimsMutation: validating claim %s", claim_uuid)
@@ -915,7 +916,13 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
                     'title': claim.code,
                     'list': c_errors
                 })
-
+                
+        if len(remaining_uuid):
+                errors += {
+                    'title': _('error'),
+                    'list': [{'message': _(
+                        "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)}}]
+                }
         if len(errors) == 1:
             errors = errors[0]['list']
         cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
@@ -942,8 +949,8 @@ class DeleteClaimsMutation(OpenIMISMutation):
         for claim_uuid in data["uuids"]:
             claim = Claim.objects \
                 .filter(uuid=claim_uuid) \
-                .prefetch_related("items") \
-                .prefetch_related("services") \
+                .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(*filter_validity())))\
+                .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(*filter_validity())))\
                 .first()
             if claim is None:
                 errors += {
