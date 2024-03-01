@@ -1,9 +1,8 @@
-import math
-from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem ,ClaimServiceService
+from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail
 from medical.models import Item, Service
 from django.core.exceptions import ValidationError
 from django.utils.translation import gettext as _
-from .apps import ClaimConfig
+
 
 def process_child_relation(user, data_children, claim_id, children, create_hook):
     claimed = 0
@@ -11,14 +10,7 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
     if __check_if_maximum_amount_overshoot(data_children, children):
         raise ValidationError(_("mutation.claim_item_service_maximum_amount_overshoot"))
     for data_elt in data_children:
-        if not ClaimConfig.native_code_for_services:
-            if create_hook==service_create_hook :
-                claimed += calcul_amount_service(data_elt)
-            else:
-                claimed += data_elt['qty_provided'] * data_elt['price_asked']
-        else:
-            claimed += data_elt['qty_provided'] * data_elt['price_asked']
-
+        claimed += data_elt['qty_provided'] * data_elt['price_asked']
         elt_id = data_elt.pop('id') if 'id' in data_elt else None
         if elt_id:
             # elt has been historized along with claim historization
@@ -28,9 +20,6 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
             elt.audit_user_id = user.id_for_audit
             elt.claim_id = claim_id
             elt.validity_to = None
-            if create_hook==service_create_hook :
-                service_update_hook(elt.claim_id, data_elt)
-
             elt.save()
         else:
             data_elt['validity_from'] = TimeUtils.now()
@@ -44,20 +33,6 @@ def process_child_relation(user, data_children, claim_id, children, create_hook)
 
     return claimed
 
-def calcul_amount_service(elt):
-    totalClaimed = elt['price_asked'] * elt['qty_provided']
-    if len(elt['service_item_set'])!=0 and len(elt['service_service_set'])!=0:
-        totalClaimed = 0
-        for service_item_set in elt['service_item_set']:
-            if "qty_asked" in service_item_set:
-                if not (math.isnan(service_item_set["qty_asked"])):
-                    totalClaimed += service_item_set['qty_asked'] * service_item_set['price_asked']
-        for service_service_set in elt['service_service_set']:
-            if "qty_asked" in service_service_set:
-                if not (math.isnan(service_service_set["qty_asked"])):
-                    totalClaimed += service_service_set['qty_asked'] * service_service_set['price_asked']
-    return totalClaimed
-        
 
 def __check_if_maximum_amount_overshoot(data_children, children):
     is_overshoot = False
@@ -87,68 +62,8 @@ def item_create_hook(claim_id, item):
 
 
 def service_create_hook(claim_id, service):
-    service_item_set = service.pop('service_item_set', None)
-    service_service_set = service.pop('service_service_set', None)
-    ClaimServiceId = ClaimService.objects.create(claim_id=claim_id, **service)
-    if(service_item_set):
-        for serviceL in service_item_set:
-            if "qty_asked" in serviceL:
-                if (math.isnan(serviceL["qty_asked"])):
-                    serviceL["qty_asked"] = 0
-            itemId = Item.objects.filter(code=serviceL["sub_item_code"]).first()
-            ClaimServiceItem.objects.create(
-                item = itemId,
-                claim_service = ClaimServiceId,
-                qty_displayed = serviceL["qty_asked"],
-                qty_provided = serviceL["qty_provided"],
-                price_asked = serviceL["price_asked"],
-            )
+    ClaimService.objects.create(claim_id=claim_id, **service)
 
-    if(service_service_set):
-        for serviceserviceS in service_service_set:
-            if "qty_asked" in serviceserviceS :
-                if (math.isnan(serviceserviceS["qty_asked"])):
-                    serviceserviceS["qty_asked"] = 0
-            serviceId = Service.objects.filter(code=serviceserviceS["sub_service_code"]).first()
-            ClaimServiceService.objects.create(
-                service = serviceId,
-                claim_service = ClaimServiceId,
-                qty_displayed = serviceserviceS["qty_asked"],
-                qty_provided = serviceserviceS["qty_provided"],
-                price_asked = serviceserviceS["price_asked"],
-            )
-
-def service_update_hook(claim_id, service):
-    service_item_set = service["service_item_set"]
-    service_service_set = service["service_service_set"]
-    service.pop('service_item_set', None)
-    service.pop('service_service_set', None)
-    ClaimServiceId = ClaimService.objects.filter(claim=claim_id, service=service["service_id"]).first()
-    if(service_item_set):
-        for serviceL in service_item_set:
-            if "qty_asked" in serviceL:
-                if (math.isnan(serviceL["qty_asked"])):
-                    serviceL["qty_asked"] = 0
-            itemId = Item.objects.filter(code=serviceL["sub_item_code"]).first()
-            claimServiceItemId = ClaimServiceItem.objects.filter(
-                item=itemId,
-                claim_service = ClaimServiceId
-            ).first()
-            claimServiceItemId.qty_displayed=serviceL["qty_asked"]
-            claimServiceItemId.save()
-
-    if(service_service_set):
-        for serviceserviceS in service_service_set:
-            if "qty_asked" in serviceserviceS:
-                if (math.isnan(serviceserviceS["qty_asked"])):
-                    serviceserviceS["qty_asked"] = 0
-            serviceId = Service.objects.filter(code=serviceserviceS["sub_service_code"]).first()
-            claimServiceServiceId = ClaimServiceService.objects.filter(
-                service=serviceId,
-                claim_service = ClaimServiceId
-            ).first()
-            claimServiceServiceId.qty_displayed=serviceserviceS["qty_asked"]
-            claimServiceServiceId.save()
 
 def process_items_relations(user, claim, items):
     return process_child_relation(user, items, claim.id, claim.items, item_create_hook)

@@ -1,5 +1,5 @@
 from django.urls import path
-from claim import views
+from . import views
 
 urlpatterns = [
     path('print/', views.print, name='print'),

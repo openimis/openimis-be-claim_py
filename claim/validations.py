@@ -2,7 +2,7 @@ import itertools
 import logging
 from collections import namedtuple
 
-from claim.models import ClaimItem, Claim, ClaimService, ClaimDedRem, ClaimDetail, ClaimServiceService, ClaimServiceItem
+from claim.models import ClaimItem, Claim, ClaimService, ClaimDedRem, ClaimDetail
 from core import utils
 from core.datetimes.shared import datetimedelta
 from core.utils import filter_validity
@@ -11,7 +11,7 @@ from django.db.models import Sum, Q
 from django.db.models.functions import Coalesce
 from django.utils.translation import gettext as _
 from insuree.models import InsureePolicy
-from medical.models import Service, ServiceService, ServiceItem
+from medical.models import Service
 from medical_pricelist.models import ItemsPricelistDetail, ServicesPricelistDetail
 from policy.models import Policy
 from product.models import Product, ProductItem, ProductService, ProductItemOrService
@@ -306,6 +306,7 @@ def frequency_check(qs, claim, elt):
                 claim__status__gt=Claim.STATUS_ENTERED
                 ) \
         .exclude(claim__uuid=claim.uuid) \
+        .order_by('-claim__date_from') \
         .exists()
 
 
@@ -1129,73 +1130,13 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
 
             if claim_detail.price_approved is not None:
                 set_price_adjusted = claim_detail.price_approved
-            if claim_detail.price_origin == ProductItemOrService.ORIGIN_CLAIM:
-                set_price_adjusted = claim_detail.price_asked
-                if not ClaimConfig.native_code_for_services:
-                    try:
-                        if claim_detail.service.packagetype == 'F':
-                            service_price = claim_detail.service.price
-                            if claim_detail.price_adjusted is not None:
-                                logger.debug(f"compare {claim_detail.price_adjusted} and {service_price}")
-                                if claim_detail.price_adjusted > service_price:
-                                    set_price_adjusted = service_price
-                            else:
-                                logger.debug(f"compare {claim_detail.price_asked} and {service_price}")
-                                if claim_detail.price_asked > service_price:
-                                    set_price_adjusted = service_price
-                    except:
-                        logger.debug("This it an item element")
             else:
-                set_price_adjusted = pl_price
-                if not ClaimConfig.native_code_for_services:
-                    try:
-                        contunue_service_check = True
-                        if claim_detail.service.packagetype == 'P':
-                            service_services = ServiceService.objects.filter(servicelinkedService=claim_detail.service.id).all()
-                            claim_service_services = ClaimServiceService.objects.filter(claim_service=claim_detail.id).all()
-                            if len(service_services) == len(claim_service_services):
-                                for servservice in service_services:
-                                    for claimserviceservice in claim_service_services:
-                                        if servservice.service.id == claimserviceservice.service.id:
-                                            logger.debug(f"comparing serviceservice qty {servservice.qty_provided}\
-                                                and claimserviceservice qty {claimserviceservice.qty_displayed}")
-                                            if servservice.qty_provided != claimserviceservice.qty_displayed:
-                                                set_price_adjusted = 0
-                                                contunue_service_check = False
-                                                break
-                                    if not contunue_service_check:
-                                        break
-                            else:
-                                # user misconfiguration !
-                                set_price_adjusted = 0
-                                contunue_service_check = False
-                            logger.debug(f"set_price_adjusted after service check {set_price_adjusted}")
-                            if contunue_service_check:
-                                contunue_item_check = True
-                                service_items = ServiceItem.objects.filter(servicelinkedItem=claim_detail.service.id).all()
-                                claim_service_items = ClaimServiceItem.objects.filter(claim_service=claim_detail.id).all()
-                                logger.debug(f"service_items: {service_items}")
-                                logger.debug(f"claim_service_items: {claim_service_items}")
-                                if len(service_items) == len(claim_service_items):
-                                    for serviceitem in service_items:
-                                        for claimservicesitem in claim_service_items:
-                                            if serviceitem.item.id == claimservicesitem.item.id:
-                                                logger.debug(f"comparing serviceitem qty {serviceitem.qty_provided}\
-                                                 and claimservicesitem qty {claimservicesitem.qty_displayed}")
-                                                if serviceitem.qty_provided != claimservicesitem.qty_displayed:
-                                                    set_price_adjusted = 0
-                                                    contunue_item_check = False
-                                                    break
-                                        if not contunue_item_check:
-                                            break
-                                else:
-                                    # user misconfiguration !
-                                    set_price_adjusted = 0
-                                logger.debug(f"set_price_adjusted after items check {set_price_adjusted}")
-                    except:
-                        logger.debug("This is a ClaimItem element, not a ClaimService")
+                if claim_detail.price_origin == ProductItemOrService.ORIGIN_CLAIM:
+                    set_price_adjusted = claim_detail.price_asked
+                else:
+                    set_price_adjusted = pl_price
 
-            work_value = int(itemsvc_quantity * set_price_adjusted)
+            work_value = itemsvc_quantity * set_price_adjusted
 
             if claim_detail.limitation == ProductItemOrService.LIMIT_FIXED_AMOUNT \
                     and claim_detail.limitation_value \

@@ -11,10 +11,7 @@ from core.services import create_or_update_interactive_user, create_or_update_co
 import datetime
 from .services import *
 import core
-from medical.test_helpers import create_test_service, create_test_item
-from claim.utils import service_create_hook, calcul_amount_service, service_update_hook
-from claim.test_helpers import create_test_claim
-from claim.models import ClaimServiceItem, ClaimServiceService
+
 
 class ClaimSubmitServiceTestCase(TestCase):
     test_hf = None
@@ -285,53 +282,6 @@ class ClaimSubmitServiceTestCase(TestCase):
 
         with self.assertRaises(ValidationError):
             service.enter_and_submit(claim, False)
-
-    def test_service_create_hook(self):
-        item = create_test_item("D", custom_props={})
-        service = create_test_service("V")
-        claim = create_test_claim()
-        service_items_dict = {
-            "qty_provided": 7, "price_asked": 11, "service_id": 23,
-            "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
-            "service_item_set": [{"sub_item_code": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
-            "service_service_set": [{"sub_service_code": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
-        }
-        service_create_hook(claim.id, service_items_dict)
-        claim_service_item = ClaimServiceItem.objects.filter(item=item.id)
-        self.assertTrue(len(claim_service_item) > 0)
-        claim_service_item = claim_service_item.first()
-        self.assertEquals(claim_service_item.qty_displayed, 1)
-        self.assertEquals(claim_service_item.qty_provided, 7)
-        self.assertEquals(claim_service_item.price_asked, 11)
-
-        claim_service_service = ClaimServiceService.objects.filter(service=service.id)
-        self.assertTrue(len(claim_service_service) > 0)
-        claim_service_service = claim_service_service.first()
-        self.assertEquals(claim_service_service.qty_displayed, 2)
-        self.assertEquals(claim_service_service.qty_provided, 3)
-        self.assertEquals(claim_service_service.price_asked, 20)
-
-        service_items_dict["service_item_set"] = [{"qty_asked": 90, "sub_item_code": item.code}]
-        service_items_dict["service_service_set"] = [{"qty_asked": 100, "sub_service_code": service.code}]
-            
-        service_update_hook(claim.id, service_items_dict)
-        claim_service_service.refresh_from_db()
-        self.assertEqual(100, claim_service_service.qty_displayed)
-        
-        claim_service_item.refresh_from_db()
-        self.assertEqual(90, claim_service_item.qty_displayed)
-    
-    def test_calcul_amount_service(self):
-        item = create_test_item("D", custom_props={})
-        service = create_test_service("V")
-        service_items_dict = {
-            "qty_provided": 5, "price_asked": 50, "service_id": 23,
-            "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
-            "service_item_set": [{"sub_item_code": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
-            "service_service_set": [{"sub_service_code": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
-        }
-        result = calcul_amount_service(service_items_dict)
-        self.assertEqual(result, 51)
 
     def _get_test_dict(self, code=None):
         return {
