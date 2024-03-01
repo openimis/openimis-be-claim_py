@@ -293,8 +293,8 @@ class ClaimSubmitServiceTestCase(TestCase):
         service_items_dict = {
             "qty_provided": 7, "price_asked": 11, "service_id": 23,
             "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
-            "serviceItemSet": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
-            "serviceserviceSet": [{"subServiceCode": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
+            "service_item_set": [{"sub_item_code": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
+            "service_service_set": [{"sub_service_code": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
         }
         service_create_hook(claim.id, service_items_dict)
         claim_service_item = ClaimServiceItem.objects.filter(item=item.id)
@@ -311,8 +311,8 @@ class ClaimSubmitServiceTestCase(TestCase):
         self.assertEquals(claim_service_service.qty_provided, 3)
         self.assertEquals(claim_service_service.price_asked, 20)
 
-        service_items_dict["serviceItemSet"] = [{"qty_asked": 90, "subItemCode": item.code}]
-        service_items_dict["serviceserviceSet"] = [{"qty_asked": 100, "subServiceCode": service.code}]
+        service_items_dict["service_item_set"] = [{"qty_asked": 90, "sub_item_code": item.code}]
+        service_items_dict["service_service_set"] = [{"qty_asked": 100, "sub_service_code": service.code}]
             
         service_update_hook(claim.id, service_items_dict)
         claim_service_service.refresh_from_db()
@@ -327,8 +327,8 @@ class ClaimSubmitServiceTestCase(TestCase):
         service_items_dict = {
             "qty_provided": 5, "price_asked": 50, "service_id": 23,
             "status": 1, "validity_from": "2019-06-01", "validity_to": None, "audit_user_id": -1,
-            "serviceItemSet": [{"subItemCode": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
-            "serviceserviceSet": [{"subServiceCode": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
+            "service_item_set": [{"sub_item_code": item.code, "qty_asked":1, "qty_provided": 7, "price_asked": 11}],
+            "service_service_set": [{"sub_service_code": service.code, "qty_asked":2, "qty_provided": 3, "price_asked": 20}]
         }
         result = calcul_amount_service(service_items_dict)
         self.assertEqual(result, 51)

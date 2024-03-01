@@ -1202,14 +1202,14 @@ class ValidationTest(TestCase):
         # )
         claimserviceservice = ClaimServiceService.objects.create(
             service = service,
-            claimlinkedService = claimservice1,
+            claim_service = claimservice1,
             qty_displayed = 5,
             qty_provided = 4,
             price_asked = 300,
         )
         claimserviceitem = ClaimServiceItem.objects.create(
             item = item,
-            claimlinkedItem = claimservice1,
+            claim_service = claimservice1,
             qty_displayed = 2,
             qty_provided = 3,
             price_asked = 500,

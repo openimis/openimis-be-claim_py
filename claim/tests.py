@@ -154,7 +154,7 @@ class ClaimGraphQLTestCase(GraphQLTestCase):
                 qtyProvided: "1.00"
                 status: 1,
                 serviceItemSet: [],
-                serviceserviceSet: []
+                serviceServiceSet: []
             }}
                 ]
                 items: [

@@ -77,7 +77,7 @@ class ClaimItemInputType(InputObjectType):
 
 class ClaimSubServiceInputType(InputObjectType):
     id = graphene.Int(required=False)
-    subServiceCode = graphene.String(required=True)
+    sub_service_code = graphene.String(required=True)
     qty_provided = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
     qty_asked = graphene.Decimal(
@@ -88,7 +88,7 @@ class ClaimSubServiceInputType(InputObjectType):
 
 class ClaimSubItemInputType(InputObjectType):
     id = graphene.Int(required=False)
-    subItemCode = graphene.String(required=True)
+    sub_item_code = graphene.String(required=True)
     qty_provided = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
     qty_asked = graphene.Decimal(
@@ -134,8 +134,8 @@ class ClaimServiceInputType(InputObjectType):
     price_origin = graphene.String(max_length=1, required=False)
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
-    serviceItemSet = graphene.List(ClaimSubItemInputType, required=False)
-    serviceserviceSet = graphene.List(ClaimSubServiceInputType, required=False)
+    service_item_set = graphene.List(ClaimSubItemInputType, required=False)
+    service_service_set = graphene.List(ClaimSubServiceInputType, required=False)
 
 
 class FeedbackInputType(InputObjectType):
@@ -834,22 +834,22 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                     all_rejected = False
             services = data.pop('services') if 'services' in data else []
             claimed = 0
-            ClaimServiceElts = []
+            claim_service_elements = []
             for service in services:
                 service_id = service.pop('id')
-                service_linked = service.pop('serviceItemSet', [])
+                service_linked = service.pop('service_service_set', [])
                 logger.debug("service_linked ", service_linked)
-                serviceserviceSet = service.pop('serviceserviceSet', [])
-                logger.debug("serviceserviceSet ", serviceserviceSet)
+                service_service_set = service.pop('service_service_set', [])
+                logger.debug("service_service_set ", service_service_set)
                 claim.services.filter(id=service_id).update(**service)
                 if ClaimConfig.native_code_for_services == False:
-                    for claim_service_service in serviceserviceSet:
+                    for claim_service_service in service_service_set:
                         claim_service_code = claim_service_service.pop('subServiceCode')
                         claim_service = claim.services.filter(id=service_id).first()
                         if claim_service:
-                            service_elt = Service.objects.filter(code=claim_service_code).first()
-                            if service_elt:
-                                claim_service_to_update = claim_service.claimlinkedService.filter(service=service_elt.id)
+                            service_element = Service.objects.filter(*filter_validity(), code=claim_service_code).first()
+                            if service_element:
+                                claim_service_to_update = claim_service.services.filter(service=service_element.id)
                                 logger.debug("claim_service_to_update ", claim_service_to_update)
                                 if claim_service_to_update:
                                     qty_asked = claim_service_service.pop('qty_asked', 0)
@@ -858,14 +858,14 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                                     price = qty_asked * price_asked
                                     claimed += price
                                     claim_service_to_update.update(**claim_service_service)
-                            ClaimServiceElts.append(claim_service)
+                            claim_service_elements.append(claim_service)
                     for claim_service_item in service_linked:
                         claim_item_code = claim_service_item.pop('subItemCode')
                         claim_service = claim.services.filter(id=service_id).first()
                         if claim_service:
-                            item_elt = Item.objects.filter(code=claim_item_code).first()
-                            if item_elt:
-                                claim_item_to_update = claim_service.claimlinkedItem.filter(item=item_elt.id)
+                            item_element = Item.objects.filter(*filter_validity(), code=claim_item_code).first()
+                            if item_element:
+                                claim_item_to_update = claim_service.items.filter(item=item_element.id)
                                 logger.debug("claim_item_to_update ", claim_item_to_update)
                                 if claim_item_to_update:
                                     qty_asked = claim_service_item.pop('qty_asked', 0)
@@ -880,7 +880,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
             claim.approved = approved_amount(claim)
             if ClaimConfig.native_code_for_services == False:
                 claim.claimed = claimed
-                for claimservice in ClaimServiceElts:
+                for claimservice in claim_service_elements:
                     setattr(claimservice, 'price_adjusted', claimed)
             claim.audit_user_id_review = user.id_for_audit
             if all_rejected:
