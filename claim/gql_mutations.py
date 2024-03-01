@@ -25,8 +25,9 @@ from graphene import InputObjectType
 
 from claim.gql_queries import ClaimGQLType
 from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, \
-    ClaimDedRem, GeneralClaimAttachmentType
+    ClaimDedRem, GeneralClaimAttachmentType, ClaimServiceItem ,ClaimServiceService
 from product.models import ProductItemOrService
+from medical.models import Item, Service
 
 from claim.utils import process_items_relations, process_services_relations
 from claim.services import validate_claim_data as service_validate_claim_data, \
@@ -74,6 +75,26 @@ class ClaimItemInputType(InputObjectType):
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
 
+class ClaimSubServiceInputType(InputObjectType):
+    id = graphene.Int(required=False)
+    sub_service_code = graphene.String(required=True)
+    qty_provided = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    qty_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+
+
+class ClaimSubItemInputType(InputObjectType):
+    id = graphene.Int(required=False)
+    sub_item_code = graphene.String(required=True)
+    qty_provided = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    qty_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
+    price_asked = graphene.Decimal(
+        max_digits=18, decimal_places=2, required=False)
 
 class ClaimServiceInputType(InputObjectType):
     id = graphene.Int(required=False)
@@ -113,6 +134,8 @@ class ClaimServiceInputType(InputObjectType):
     price_origin = graphene.String(max_length=1, required=False)
     exceed_ceiling_amount_category = graphene.Decimal(
         max_digits=18, decimal_places=2, required=False)
+    service_item_set = graphene.List(ClaimSubItemInputType, required=False)
+    service_service_set = graphene.List(ClaimSubServiceInputType, required=False)
 
 
 class FeedbackInputType(InputObjectType):
@@ -235,6 +258,7 @@ class ClaimInputType(OpenIMISMutation.Input):
 
     items = graphene.List(ClaimItemInputType, required=False)
     services = graphene.List(ClaimServiceInputType, required=False)
+
 
 
 class CreateClaimInputType(ClaimInputType):
@@ -777,12 +801,55 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 if item['status'] == ClaimItem.STATUS_PASSED:
                     all_rejected = False
             services = data.pop('services') if 'services' in data else []
+            claimed = 0
+            claim_service_elements = []
             for service in services:
                 service_id = service.pop('id')
+                service_linked = service.pop('service_service_set', [])
+                logger.debug("service_linked ", service_linked)
+                service_service_set = service.pop('service_service_set', [])
+                logger.debug("service_service_set ", service_service_set)
                 claim.services.filter(id=service_id).update(**service)
+                if not ClaimConfig.native_code_for_services:
+                    for claim_service_service in service_service_set:
+                        claim_service_code = claim_service_service.pop('subServiceCode')
+                        claim_service = claim.services.filter(id=service_id).first()
+                        if claim_service:
+                            service_element = Service.objects.filter(*filter_validity(), code=claim_service_code).first()
+                            if service_element:
+                                claim_service_to_update = claim_service.services.filter(service=service_element.id)
+                                logger.debug("claim_service_to_update ", claim_service_to_update)
+                                if claim_service_to_update:
+                                    qty_asked = claim_service_service.pop('qty_asked', 0)
+                                    price_asked = claim_service_service.pop('price_asked', 0)
+                                    claim_service_service['qty_displayed'] = qty_asked
+                                    price = qty_asked * price_asked
+                                    claimed += price
+                                    claim_service_to_update.update(**claim_service_service)
+                            claim_service_elements.append(claim_service)
+                    for claim_service_item in service_linked:
+                        claim_item_code = claim_service_item.pop('subItemCode')
+                        claim_service = claim.services.filter(id=service_id).first()
+                        if claim_service:
+                            item_element = Item.objects.filter(*filter_validity(), code=claim_item_code).first()
+                            if item_element:
+                                claim_item_to_update = claim_service.items.filter(item=item_element.id)
+                                logger.debug("claim_item_to_update ", claim_item_to_update)
+                                if claim_item_to_update:
+                                    qty_asked = claim_service_item.pop('qty_asked', 0)
+                                    price_asked = claim_service_item.pop('price_asked', 0)
+                                    claim_service_item['qty_displayed'] = qty_asked
+                                    price = qty_asked * price_asked
+                                    claimed += price
+                                    claim_item_to_update.update(**claim_service_item)
+
                 if service['status'] == ClaimService.STATUS_PASSED:
                     all_rejected = False
             claim.approved = approved_amount(claim)
+            if not ClaimConfig.native_code_for_services:
+                claim.claimed = claimed
+                for claimservice in claim_service_elements:
+                    setattr(claimservice, 'price_adjusted', claimed)
             claim.audit_user_id_review = user.id_for_audit
             if all_rejected:
                 claim.status = Claim.STATUS_REJECTED
