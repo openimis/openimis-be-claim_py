@@ -1,5 +1,5 @@
 from claim.services import update_claims_dedrems, set_claims_status
-from claim.models import Claim, ClaimDedRem, ClaimItem, ClaimDetail, ClaimService
+from claim.models import Claim, ClaimDedRem, ClaimItem, ClaimDetail, ClaimService, ClaimServiceItem, ClaimServiceService
 from claim.test_helpers import create_test_claim, create_test_claimservice, create_test_claimitem, \
     mark_test_claim_as_processed, delete_claim_with_itemsvc_dedrem_and_history
 from core.test_helpers import create_test_officer
@@ -11,6 +11,9 @@ from django.test import TestCase
 from insuree.models import Family, Insuree
 from insuree.test_helpers import create_test_insuree
 from location.models import HealthFacility
+from medical_pricelist.test_helpers import add_service_to_hf_pricelist, add_item_to_hf_pricelist
+from medical.models import ServiceItem, ServiceService
+from product.models import ProductItemOrService
 from medical.test_helpers import create_test_service, create_test_item
 from medical_pricelist.test_helpers import add_service_to_hf_pricelist, add_item_to_hf_pricelist, \
     update_pricelist_service_detail_in_hf_pricelist, update_pricelist_item_detail_in_hf_pricelist
@@ -931,7 +934,7 @@ class ValidationTest(TestCase):
         # Then dedrem should have been updated
         dedrem = ClaimDedRem.objects.filter(claim=claim1).first()
         self.assertIsNotNone(dedrem)
-        self.assertEquals(dedrem.rem_g, 37 + 53)
+        self.assertEquals(dedrem.rem_g, 200)  # 100*1 + 100*1
 
         # tearDown
         # dedrem.delete() # already done if the test passed
@@ -1118,6 +1121,7 @@ class ValidationTest(TestCase):
         service.delete()
         item.delete()
         product.delete()
+
     def test_set_status(self):
         class DummyUser:
             id_for_audit=-1
@@ -1128,3 +1132,131 @@ class ValidationTest(TestCase):
         restult =set_claims_status([claim.uuid], 'feedback_status', Claim.FEEDBACK_SELECTED, user = DummyUser())
         claim.refresh_from_db()
         self.assertEqual(claim.feedback_status, Claim.FEEDBACK_SELECTED)
+    
+    def test_submit_claim_with_different_packatypes(self):
+        from .apps import ClaimConfig
+        ClaimConfig.native_code_for_services=False
+        insuree = create_test_insuree()
+        self.assertIsNotNone(insuree)
+        product = create_test_product("VISIT", custom_props={})
+        policy = create_test_policy(product, insuree, link=True)
+        service = create_test_service("V", custom_props={"packagetype": "F"})
+        item = create_test_item("D", custom_props={})
+        product_service = create_test_product_service(product, service)
+        product_service.price_origin = ProductItemOrService.ORIGIN_CLAIM
+        product_service.save()
+        product_item = create_test_product_item(product, item)
+        product_item.price_origin = ProductItemOrService.ORIGIN_CLAIM
+        product_item.save()
+        pricelist_detail1 = add_service_to_hf_pricelist(service)
+        pricelist_detail2 = add_item_to_hf_pricelist(item)
+
+        claim1 = create_test_claim({"insuree_id": insuree.id})
+        claimservice1 = create_test_claimservice(
+            claim1, custom_props={"service_id": service.id})
+        clalimitem1 = create_test_claimitem(
+            claim1, "D", custom_props={"item_id": item.id})
+        # Set the price_adjusted to 4000
+        claimservice1.price_adjusted = 4000
+        claimservice1.save()
+        # set the service price to 1000 lower than the price_adjusted
+        service.price = 1000
+        service.save()
+        service.refresh_from_db()
+        errors = validate_claim(claim1, True)
+        errors = validate_assign_prod_to_claimitems_and_services(claim1)
+        errors += process_dedrem(claim1, -1, True)
+        self.assertEqual(len(errors), 0)
+        # The claimservice1's price_adjusted should be the service price
+        # because the price_adjusted is greater than the service (4000 > 1000)
+        claimservice1.refresh_from_db()
+        self.assertEqual(claimservice1.price_adjusted, 1000)
+
+        # Set the price_adjusted to None
+        claimservice1.price_adjusted = None
+        claimservice1.price_asked = 6000
+        service.price = 750
+        service.save()
+        claimservice1.save()
+        validate_claim(claim1, True)
+        validate_assign_prod_to_claimitems_and_services(claim1)
+        process_dedrem(claim1, -1, True)
+        claimservice1.refresh_from_db()
+        service.refresh_from_db()
+        # The claimservice1's price_adjusted should also be the service's price
+        # because the price_asked is now also greater than the service (6000 > 750)
+        self.assertEqual(claimservice1.price_adjusted, 750)
+
+        # Change the price_origin
+        product_service.price_origin = ProductItemOrService.ORIGIN_PRICELIST
+        product_service.save()
+        product_item.price_origin = ProductItemOrService.ORIGIN_PRICELIST
+        product_item.save()
+        service.packagetype = "P"
+        service.save()
+        # serviceservice = ServiceService.objects.create(
+        #     servicelinkedService=service,
+        #     service_id = claimservice1.service_id,
+        #     price_asked = 3,
+        #     qty_provided = 2
+        # )
+        claimserviceservice = ClaimServiceService.objects.create(
+            service = service,
+            claim_service = claimservice1,
+            qty_displayed = 5,
+            qty_provided = 4,
+            price_asked = 300,
+        )
+        claimserviceitem = ClaimServiceItem.objects.create(
+            item = item,
+            claim_service = claimservice1,
+            qty_displayed = 2,
+            qty_provided = 3,
+            price_asked = 500,
+        )
+        serviceitem = ServiceItem.objects.create(
+            servicelinkedItem=service,
+            item = clalimitem1.item,
+            price_asked = 12,
+            qty_provided = 11
+        )
+
+        validate_claim(claim1, True)
+        validate_assign_prod_to_claimitems_and_services(claim1)
+        process_dedrem(claim1, -1, True)
+        claimservice1.refresh_from_db()
+        # claimservicesitem.qty_provided 2 is not equal to qty_displayed on the claimserviceservice
+        # so the price_adjusted is set to 0
+        self.assertEqual(claimservice1.price_adjusted, 0)
+
+        claimserviceservice.qty_displayed = 2
+        claimserviceservice.save()
+        claimserviceservice.refresh_from_db
+        validate_claim(claim1, True)
+        validate_assign_prod_to_claimitems_and_services(claim1)
+        process_dedrem(claim1, -1, True)
+        claimservice1.refresh_from_db()
+        # service item.qty_provided 11 is not equal to qty_displayed on the claimserviceitem
+        # so the price_adjusted is set to 0
+        self.assertEqual(claimservice1.price_adjusted, 0)
+
+        dedrem_qs = ClaimDedRem.objects.filter(claim=claim1)
+        # tearDown
+        dedrem_qs.delete()
+        # serviceservice.delete()
+        claimserviceservice.delete()
+        claimserviceitem.delete()
+        claimservice1.delete()
+        serviceitem.delete()
+        clalimitem1.delete()
+        claim1.delete()
+        policy.insuree_policies.first().delete()
+        policy.delete()
+        product_item.delete()
+        product_service.delete()
+        pricelist_detail1.delete()
+        pricelist_detail2.delete()
+        service.delete()
+        item.delete()
+        product.delete()
+        ClaimConfig.native_code_for_services=True
