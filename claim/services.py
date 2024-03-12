@@ -649,7 +649,7 @@ def set_claims_status(uuids, field, status, audit_data=None, user=None):
                 if status == Claim.FEEDBACK_SELECTED:
                     create_feedback_prompt(claim, user)
                 elif status in [Claim.FEEDBACK_NOT_SELECTED, Claim.FEEDBACK_BYPASSED]:
-                    set_feedback_prompt_validity_to_to_current_date(claim_uuid)
+                    set_feedback_prompt_validity_to_to_current_date(claim.uuid)
             if audit_data:
                 for k, v in audit_data.items():
                     setattr(claim, k, v)

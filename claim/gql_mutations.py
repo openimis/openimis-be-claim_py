@@ -24,7 +24,6 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError, PermissionDenied, ObjectDoesNotExist
 from django.utils.translation import gettext as _
 from graphene import InputObjectType
-
 from claim.gql_queries import ClaimGQLType
 from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem, ClaimService, ClaimAttachment, \
     ClaimDedRem, GeneralClaimAttachmentType, ClaimAttachmentType,ClaimServiceService
@@ -37,7 +36,7 @@ from claim.utils import process_items_relations, process_services_relations
 from claim.services import validate_claim_data as service_validate_claim_data, \
         update_or_create_claim as service_update_or_create_claim, check_unique_claim_code, submit_claim,\
             validate_and_process_dedrem_claim as service_validate_and_process_dedrem_claim,\
-            create_feedback_prompt as service_create_feedback_prompt,\
+            create_feedback_prompt as service_create_feedback_prompt, update_claims_dedrems,\
                 set_feedback_prompt_validity_to_to_current_date, set_claims_status
 from django.db import transaction
 import requests
@@ -462,7 +461,7 @@ class UpdateAttachmentMutation(OpenIMISMutation):
                         not any(domain in parsed_url.path for domain in ClaimConfig.allowed_domains_attachments)):
                     raise ValidationError(_("mutation.attachment_url_domain_not_allowed"))
                 if data['predefined_type'] in attachment_strategies_dict:
-                    data['url'] = attachment_strategies_dict[data['predefined_type']](data)
+                    data['url'] = attachment_strategies_dict[data['predefined_type']].handler(data)
                     data['document'] = data['url']
                 data['predefined_type'] = ClaimAttachmentType.objects.get(validity_to__isnull=True,
                                                                           claim_general_type="URL",
@@ -930,22 +929,24 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         uuids = data.get("uuids", None)
         client_mutation_id = data.get("client_mutation_id", None)
         claims = Claim.objects \
-                .filter(uuid_in=uuids) \
+
+                .filter(uuid__in=uuids) \
                 .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(*filter_validity())))\
                 .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(*filter_validity())))
         remaining_uuid = list(map(str.upper,uuids))
         for claim in claims:
             remaining_uuid.remove(claim.uuid.upper())
             
-            logger.debug("ProcessClaimsMutation: processing %s", claim_uuid)
+
+            logger.debug("ProcessClaimsMutation: processing %s", claim.uuid)
             c_errors = []
      
             claim.save_history()
             claim.audit_user_id_process = user.id_for_audit
-            logger.debug("ProcessClaimsMutation: validating claim %s", claim_uuid)
+            logger.debug("ProcessClaimsMutation: validating claim %s", claim.uuid)
             c_errors += validate_and_process_dedrem_claim(claim, user, True)
 
-            logger.debug("ProcessClaimsMutation: claim %s set processed or valuated", claim_uuid)
+            logger.debug("ProcessClaimsMutation: claim %s set processed or valuated", claim.uuid)
             if c_errors:
                 errors.append({
                     'title': claim.code,

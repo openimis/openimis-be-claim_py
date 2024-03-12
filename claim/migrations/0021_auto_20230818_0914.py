@@ -9,8 +9,13 @@ class Migration(migrations.Migration):
         ('claim', '0020_alter_claim_code'),
     ]
 
-    operations = [
-        migrations.AddField(
+    operations = []
+    
+    try:
+        Claim.objects.filter(pk<10).aggregate(sum=models.Count('care_type'))
+    except:
+        operations = [
+            migrations.AddField(
             model_name='claim',
             name='care_type',
             field=models.CharField(blank=True, db_column='CareType', max_length=4, null=True),
