@@ -2,6 +2,7 @@
 
 from django.db import migrations, models
 import django.db.models.deletion
+from claim.models import Claim
 
 
 class Migration(migrations.Migration):
@@ -13,7 +14,7 @@ class Migration(migrations.Migration):
 
     operations = []
     try:
-        Claim.objects.filter(pk<10).aggregate(sum=models.Count('refer_from'))
+        Claim.objects.filter(pk__lt=10).aggregate(sum=models.Count('refer_from'))
     except:
         operations.append(migrations.AddField(
             model_name='claim',
@@ -21,7 +22,7 @@ class Migration(migrations.Migration):
             field=models.ForeignKey(blank=True, db_column='ReferFrom', null=True, on_delete=django.db.models.deletion.DO_NOTHING, related_name='referFromHF', to='location.healthfacility'),
         ))
     try:
-        Claim.objects.filter(pk<10).aggregate(sum=models.Count('refer_to'))
+        Claim.objects.filter(pk__lt=10).aggregate(sum=models.Count('refer_to'))
     except:    
         operations.append(migrations.AddField(
             model_name='claim',
