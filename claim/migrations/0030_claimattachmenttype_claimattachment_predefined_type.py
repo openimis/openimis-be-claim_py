@@ -30,7 +30,7 @@ def insert_default_type(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    replaces = [('claim', '0030_claimattachmenttype_claimattachment_predefined_type')]
+    replaces = [('claim', '0028_claimattachmenttype_claimattachment_predefined_type')]
 
 
     dependencies = [
