@@ -929,7 +929,6 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         uuids = data.get("uuids", None)
         client_mutation_id = data.get("client_mutation_id", None)
         claims = Claim.objects \
-
                 .filter(uuid__in=uuids) \
                 .prefetch_related(Prefetch('items', queryset=ClaimItem.objects.filter(*filter_validity())))\
                 .prefetch_related(Prefetch('services', queryset=ClaimService.objects.filter(*filter_validity())))
