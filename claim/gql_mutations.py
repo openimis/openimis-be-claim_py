@@ -1,12 +1,11 @@
-import json
 import logging
 import uuid
 import pathlib
 import base64
 import graphene
-import graphene_django_optimizer
-from django.db.models import OuterRef, Avg, Subquery, Q
+from django.db import transaction
 
+from medical.models import ItemOrService, DIAGNOSIS_CODE_LENGTH
 from .apps import ClaimConfig
 from claim.validations import validate_claim, get_claim_category, validate_assign_prod_to_claimitems_and_services, \
     process_dedrem, approved_amount
@@ -26,7 +25,9 @@ from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem
 from product.models import ProductItemOrService
 
 from claim.utils import process_items_relations, process_services_relations
-from .services import check_unique_claim_code
+from .services import check_unique_claim_code, delete_draft_claim, generate_potential_error_message_claim_draft, \
+    prepare_reference_data_into_draft_claim_payload
+
 logger = logging.getLogger(__name__)
 
 
@@ -1009,3 +1010,146 @@ def validate_and_process_dedrem_claim(claim, user, is_process):
     if is_process:
         errors += set_claim_processed_or_valuated(claim, errors, user)
     return errors
+
+
+class ItemOrServiceCodeInputType(graphene.String):
+
+    @staticmethod
+    def coerce_string(value):
+        assert_string_length(value, ItemOrService.CODE_LENGTH)
+        return value
+
+    serialize = coerce_string
+    parse_value = coerce_string
+
+    @staticmethod
+    def parse_literal(ast):
+        result = graphene.String.parse_literal(ast)
+        assert_string_length(result, ItemOrService.CODE_LENGTH)
+        return result
+
+
+class DiagnosisCodeInputType(graphene.String):
+
+    @staticmethod
+    def coerce_string(value):
+        assert_string_length(value, DIAGNOSIS_CODE_LENGTH)
+        return value
+
+    serialize = coerce_string
+    parse_value = coerce_string
+
+    @staticmethod
+    def parse_literal(ast):
+        result = graphene.String.parse_literal(ast)
+        assert_string_length(result, DIAGNOSIS_CODE_LENGTH)
+        return result
+
+
+class DraftClaimItemInputType(InputObjectType):
+    item_code = ItemOrServiceCodeInputType(required=True)
+    qty_provided = graphene.Decimal(max_digits=18, decimal_places=2, required=True)
+    price_asked = graphene.Decimal(max_digits=18, decimal_places=2, required=True)
+
+
+class DraftClaimServiceInputType(InputObjectType):
+    service_code = ItemOrServiceCodeInputType(required=True)
+    qty_provided = graphene.Decimal(max_digits=18, decimal_places=2, required=True)
+    price_asked = graphene.Decimal(max_digits=18, decimal_places=2, required=True)
+
+
+class DraftClaimInputType(OpenIMISMutation.Input):
+    code = ClaimCodeInputType(required=True)
+    insuree_id = graphene.String(max_length=12, required=True)
+    date_from = graphene.Date(required=True)
+    date_to = graphene.Date(required=False)
+    icd_code = DiagnosisCodeInputType(required=True)
+    alt_icd_code_1 = DiagnosisCodeInputType(required=False)
+    alt_icd_code_2 = DiagnosisCodeInputType(required=False)
+    alt_icd_code_3 = DiagnosisCodeInputType(required=False)
+    alt_icd_code_4 = DiagnosisCodeInputType(required=False)
+    visit_type = graphene.String(max_length=1, required=True)
+    claim_admin_code = graphene.String(max_length=50, required=True)
+    items = graphene.List(DraftClaimItemInputType, required=False)
+    services = graphene.List(DraftClaimServiceInputType, required=False)
+
+
+class CreateDraftClaimMutation(OpenIMISMutation):
+    """
+    Create a new draft claim. It will not be saved into the system, its purpose is just to check eligibility.
+    The purpose of this mutation is to compensate the missing FHIR API draft claim functionality.
+    The claim items and services can all be entered with this call
+    """
+    _mutation_module = "claim"
+    _mutation_class = "CreateDraftClaimMutation"
+
+    class Input(DraftClaimInputType):
+        pass
+
+    @classmethod
+    def async_mutate(cls, user, **data):
+        try:
+            # Atomic for making sure that we don't keep any claim or claimitem/service in any case
+            with transaction.atomic():
+                # 1 - Do some checks
+                if type(user) is AnonymousUser or not user.id:
+                    raise ValidationError(
+                        _("mutation.authentication_required"))
+                if not user.has_perms(ClaimConfig.gql_mutation_create_claims_perms):
+                    raise PermissionDenied(_("unauthorized"))
+                # Claim code unicity should be enforced at DB Scheme level...
+                if Claim.objects.filter(code=data['code']).exists():
+                    return [{
+                        'message': _("claim.mutation.duplicated_claim_code") % {'code': data['code']},
+                    }]
+
+                # 2a - Prepare received data for creation
+                from core.utils import TimeUtils
+                data['validity_from'] = TimeUtils.now()
+                data['date_claimed'] = TimeUtils.date()
+                data['audit_user_id'] = user.id_for_audit
+                data['status'] = Claim.STATUS_ENTERED
+                data['feedback_status'] = 1
+                data['review_status'] = 1
+                data.pop('attachments', None)  # In case there are any
+                data.pop("uuid", None)  # In case there is one
+
+                # 2b - Fetch reference data based on their code
+                success, error_message = prepare_reference_data_into_draft_claim_payload(data)
+                if not success:
+                    return [{"message": error_message}]
+
+                # 3 - Create the claim, along with its Items & Services
+                claim = update_or_create_claim(data, user)
+                # claim = create_draft_claim(data, user.id_for_audit)
+
+                # 4 - Start the submission process and look for errors
+                errors = []
+                logger.debug("DraftClaimMutation: validating claim %s", claim.code)
+                errors += validate_claim(claim, True)
+                logger.debug("DraftClaimMutation: claim %s validated, nb of errors: %s", claim.code, len(errors))
+                if len(errors) == 0:
+                    errors = validate_assign_prod_to_claimitems_and_services(claim)
+                    logger.debug("DraftClaimMutation: claim %s assigned, nb of errors: %s", claim.code, len(errors))
+                    errors += process_dedrem(claim, user.id_for_audit, False)
+                    logger.debug("DraftClaimMutation: claim %s processed for dedrem, nb of errors: %s", claim.code, len(errors))
+                errors += set_claim_submitted(claim, errors, user)
+                logger.debug("DraftClaimMutation: claim done, errors: %s", len(errors))
+
+                # 5 - format the potential error message
+                # There might be errors in items & services which are not forwarded by validate_claim()
+                # (for instance: if only 1 service out of 2 is rejected)
+                error_message = generate_potential_error_message_claim_draft(claim)
+                success = not len(errors) and not len(error_message)
+
+                # 6 - delete the draft before ending
+                delete_draft_claim(claim)
+
+                if success:
+                    return []
+                return [{"message": error_message}]
+
+        except Exception as exc:
+            return [{
+                'message': _("claim.mutation.failed_to_create_claim") % {'code': data['code']},
+                'detail': str(exc)}]

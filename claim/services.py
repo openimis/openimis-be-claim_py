@@ -1,6 +1,7 @@
 import xml.etree.ElementTree as ET
 
-from medical.models import Item, Service
+from insuree.models import Insuree
+from medical.models import Item, Service, Diagnosis
 
 import core
 from django.db import connection, transaction
@@ -10,7 +11,7 @@ from core.signals import register_service_signal
 from .apps import ClaimConfig
 from django.conf import settings
 
-from claim.models import Claim, ClaimItem, ClaimService
+from claim.models import Claim, ClaimItem, ClaimService, ClaimAdmin, ClaimDetail
 from claim.utils import process_items_relations, process_services_relations
 from .validations import validate_claim, validate_assign_prod_to_claimitems_and_services, process_dedrem, \
     approved_amount, get_claim_category
@@ -379,3 +380,114 @@ def check_unique_claim_code(code):
     if Claim.objects.filter(code=code, validity_to__isnull=True).exists():
         return [{"message": "Claim code %s already exists" % code}]
     return []
+
+
+def delete_draft_claim(claim):
+    for item in claim.items.all():
+        item.delete()
+    for service in claim.services.all():
+        service.delete()
+    for dedrem in claim.dedrems.all():
+        dedrem.delete()
+    claim.delete()
+
+
+def generate_potential_error_message_claim_draft(claim_draft: Claim):
+    error_message = ""
+    if claim_draft.status == Claim.STATUS_REJECTED:
+        error_message = f"claim-{claim_draft.rejection_reason} / "
+    for item in claim_draft.items.all():
+        if item.status == ClaimItem.STATUS_REJECTED:
+            error_message += f"item-{item.item.code}-{item.rejection_reason} / "
+    for service in claim_draft.services.all():
+        if service.status == ClaimService.STATUS_REJECTED:
+            error_message += f"svc-{service.service.code}-{service.rejection_reason} / "
+    if len(error_message):
+        error_message = error_message[:-3]
+    return error_message
+
+
+def prepare_reference_data_into_draft_claim_payload(data: dict):
+    errors = []
+    error_message = ""
+
+    claim_admin_code = data.pop("claim_admin_code")
+    claim_admin = ClaimAdmin.objects.filter(validity_to__isnull=True, code=claim_admin_code).first()
+    if not claim_admin:
+        errors.append(f"claim_admin-{claim_admin_code}-20")
+    else:
+        data["admin_id"] = claim_admin.id
+
+    if not claim_admin or not claim_admin.health_facility:
+        errors.append(f"claim_admin-{claim_admin_code}-21")
+    else:
+        data["health_facility_id"] = claim_admin.health_facility_id
+
+    chf_id = data.pop("insuree_id")
+    insuree = Insuree.objects.filter(validity_to__isnull=True, chf_id=chf_id).first()
+    if not insuree:
+        errors.append(f"insuree-{chf_id}-7")
+    else:
+        data["insuree_id"] = insuree.id
+
+    main_icd_code = data.pop("icd_code")
+    main_icd = Diagnosis.objects.filter(validity_to__isnull=True, code=main_icd_code).first()
+    if not main_icd:
+        errors.append(f"icd-{main_icd_code}-8")
+    else:
+        data["icd_id"] = main_icd.id
+
+    if "alt_icd_code_1" in data:
+        code = data.pop("alt_icd_code_2")
+        alt_icd_1 = Diagnosis.objects.filter(validity_to__isnull=True, code=code).first()
+        if not alt_icd_1:
+            errors.append(f"icd-{code}-8")
+        else:
+            data["icd_1_id"] = alt_icd_1.id
+    if "alt_icd_code_2" in data:
+        code = data.pop("alt_icd_code_2")
+        alt_icd_2 = Diagnosis.objects.filter(validity_to__isnull=True, code=code).first()
+        if not alt_icd_2:
+            errors.append(f"icd-{code}-8")
+        else:
+            data["icd_2_id"] = alt_icd_2.id
+    if "alt_icd_code_3" in data:
+        code = data.pop("alt_icd_code_3")
+        alt_icd_3 = Diagnosis.objects.filter(validity_to__isnull=True, code=code).first()
+        if not alt_icd_3:
+            errors.append(f"icd-{code}-8")
+        else:
+            data["icd_3_id"] = alt_icd_3.id
+    if "alt_icd_code_4" in data:
+        code = data.pop("alt_icd_code_4")
+        alt_icd_4 = Diagnosis.objects.filter(validity_to__isnull=True, code=code).first()
+        if not alt_icd_4:
+            errors.append(f"icd-{code}-8")
+        else:
+            data["icd_4_id"] = alt_icd_4.id
+
+    for item_line in data["items"]:
+        code = item_line.pop('item_code')
+        item = Item.objects.filter(validity_to__isnull=True, code=code).first()
+        if not item:
+            errors.append(f"item-{code}-1")
+        else:
+            item_line["item_id"] = item.id
+            item_line["status"] = ClaimDetail.STATUS_PASSED
+
+    for service_line in data["services"]:
+        code = service_line.pop('service_code')
+        service = Service.objects.filter(validity_to__isnull=True, code=code).first()
+        if not service:
+            errors.append(f"service-{code}-1")
+        else:
+            service_line["service_id"] = service.id
+            service_line["status"] = ClaimDetail.STATUS_PASSED
+
+    success = not bool(errors)
+    if not success:
+        for error in errors:
+            error_message += f"{error} / "
+        error_message = error_message[:-3]
+
+    return success, error_message

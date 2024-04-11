@@ -184,6 +184,7 @@ class Query(graphene.ObjectType):
 
 class Mutation(graphene.ObjectType):
     create_claim = CreateClaimMutation.Field()
+    create_draft_claim = CreateDraftClaimMutation.Field()
     update_claim = UpdateClaimMutation.Field()
     create_claim_attachment = CreateAttachmentMutation.Field()
     update_claim_attachment = UpdateAttachmentMutation.Field()
