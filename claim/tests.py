@@ -135,7 +135,6 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
                     clientMutationId: "3a90436a-d5ea-48e7-bde4-0bcff0240260"
                     clientMutationLabel: "Create Claim - m-c-claim" 
                     code: "m-c-claim"
-                    uuid: "{cuuid}"
                 autogenerate: false
                 insureeId: {self.insuree.id}
                 adminId: {self.claim_admin.id}
@@ -174,7 +173,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         
         self.get_mutation_result("3a90436a-d5ea-48e7-bde4-0bcff0240260", self.admin_token)
         ### Update
-        
+        claim = Claim.objects.filter(code = 'm-c-claim').first()
         response = self.query(f"""
     mutation {{
       updateClaim(
@@ -182,7 +181,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
             clientMutationId: "3a90636a-d5e7-48e7-bde4-0bcff0240260"
             clientMutationLabel: "Create Claim - m-c-claim" 
             code: "m-c-claim"
-            uuid: "{cuuid}"
+            uuid: "{claim.uuid}"
             autogenerate: false
             insureeId: {self.insuree.id}
             adminId: {self.claim_admin.id}
@@ -229,7 +228,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         
         
         
-        claim = Claim.objects.filter(code = 'm-c-claim').first()
+        
         self.assertIsNotNone(claim)
         self.assertEqual(claim.status, Claim.STATUS_ENTERED)
         
