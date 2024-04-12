@@ -14,7 +14,7 @@ from graphene.test import Client
 from graphene import Schema
 
 from claim.models import Claim, ClaimAdmin
-
+import uuid
 
 from policy.models import Policy
 from policy.test_helpers import create_test_policy2
@@ -126,7 +126,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         return mutation_result
         
     def test_mutation_create_claim(self):
-
+        cuuid=str(uuid.uuid4())
         response = self.query(
             f'''
             mutation {{
@@ -135,6 +135,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
                     clientMutationId: "3a90436a-d5ea-48e7-bde4-0bcff0240260"
                     clientMutationLabel: "Create Claim - m-c-claim" 
                     code: "m-c-claim"
+                    uuid: "{cuuid}"
                 autogenerate: false
                 insureeId: {self.insuree.id}
                 adminId: {self.claim_admin.id}
@@ -170,29 +171,64 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         
         #wait 
         
-        response = self.query('''
         
-        {
-        mutationLogs(clientMutationId: "3a90436a-d5ea-48e7-bde4-0bcff0240260")
-        {
-            
-        pageInfo { hasNextPage, hasPreviousPage, startCursor, endCursor}
-        edges
-        {
-        node
-        {
-            id,status,error,clientMutationId,clientMutationLabel,clientMutationDetails,requestDateTime,jsonExt
-        }
-        }
-        }
-        }
+        self.get_mutation_result("3a90436a-d5ea-48e7-bde4-0bcff0240260", self.admin_token)
+        ### Update
         
-        ''',
+        response = self.query(f"""
+    mutation {{
+      updateClaim(
+        input: {{
+            clientMutationId: "3a90636a-d5e7-48e7-bde4-0bcff0240260"
+            clientMutationLabel: "Create Claim - m-c-claim" 
+            code: "m-c-claim"
+            uuid: "{cuuid}"
+            autogenerate: false
+            insureeId: {self.insuree.id}
+            adminId: {self.claim_admin.id}
+            dateFrom: "2023-12-06"  
+            icdId: 2 
+            jsonExt: "{{}}"
+            feedbackStatus: 1
+            reviewStatus: 1
+            dateClaimed: "2023-12-06"
+            healthFacilityId: {self.claim_admin.health_facility.id}
+            visitType: "O"
+
+    services: [
+      {{
+    id: 137
+    serviceId: 90
+    priceAsked: "500.00"
+    qtyProvided: "1.00"
+    status: 1
+
+  }}
+    ]
+    items: [
+      {{
+    id: 101
+    itemId: 182
+    priceAsked: "10.00"
+    qtyProvided: "1.00"
+    status: 1
+    
+    
+  }}
+    ]
+        }}
+      ) {{
+        clientMutationId
+        internalId
+      }}
+    }}
+    """,
             headers={"HTTP_AUTHORIZATION": f"Bearer {self.admin_token}"})
         
+        self.get_mutation_result( "3a90636a-d5e7-48e7-bde4-0bcff0240260", self.admin_token)
         
         
-        self.get_mutation_result('3a90436a-d5ea-48e7-bde4-0bcff0240260', self.admin_token )
+        
         claim = Claim.objects.filter(code = 'm-c-claim').first()
         self.assertIsNotNone(claim)
         self.assertEqual(claim.status, Claim.STATUS_ENTERED)
@@ -259,3 +295,9 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         self.assertResponseNoErrors(response)
         claim = Claim.objects.filter(code = 'm-c-claim').first()
         self.assertEqual(claim.feedback_status, Claim.FEEDBACK_SELECTED)
+        
+        
+                
+        
+  
+        content=self.send_mutation("createBenefitPlan", input_param, self.admin_token , raw = True)        
