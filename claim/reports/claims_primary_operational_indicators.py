@@ -4965,7 +4965,7 @@ template = """
         "patternLocale": "en",
         "patternCurrencySymbol": "$"
     }
-}7
+}
 """
 
 CATEGORY_TOTAL = "T"
