@@ -46,3 +46,10 @@ def process_items_relations(user, claim, items):
 
 def process_services_relations(user, claim, services):
     return process_child_relation(user, services, claim.id, claim.services, service_create_hook)
+
+
+def convert_date_to_datetime(date):
+    from core import datetime
+    time = datetime.datetime.min.time()
+    new_datetime = datetime.datetime.combine(date, time)
+    return new_datetime

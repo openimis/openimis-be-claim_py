@@ -438,7 +438,7 @@ def prepare_reference_data_into_draft_claim_payload(data: dict):
         data["icd_id"] = main_icd.id
 
     if "alt_icd_code_1" in data:
-        code = data.pop("alt_icd_code_2")
+        code = data.pop("alt_icd_code_1")
         alt_icd_1 = Diagnosis.objects.filter(validity_to__isnull=True, code=code).first()
         if not alt_icd_1:
             errors.append(f"icd-{code}-8")
@@ -479,7 +479,7 @@ def prepare_reference_data_into_draft_claim_payload(data: dict):
         code = service_line.pop('service_code')
         service = Service.objects.filter(validity_to__isnull=True, code=code).first()
         if not service:
-            errors.append(f"service-{code}-1")
+            errors.append(f"svc-{code}-1")
         else:
             service_line["service_id"] = service.id
             service_line["status"] = ClaimDetail.STATUS_PASSED

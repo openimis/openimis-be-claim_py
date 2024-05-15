@@ -16,6 +16,7 @@ from policy.models import Policy
 from product.models import Product, ProductItem, ProductService, ProductItemOrService
 
 from .apps import ClaimConfig
+from .utils import convert_date_to_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,7 @@ def validate_claimdetail_limitation_fail(claim, claimdetail):
 
 
 def frequency_check(qs, claim, elt):
-    td = claim.date_from if not claim.date_to else claim.date_to
+    td = convert_date_to_datetime(claim.date_from) if not claim.date_to else convert_date_to_datetime(claim.date_to)
     delta = datetimedelta(days=elt.frequency)
     return qs \
         .annotate(target_date=Coalesce("claim__date_to", "claim__date_from")) \

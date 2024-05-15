@@ -1121,7 +1121,6 @@ class CreateDraftClaimMutation(OpenIMISMutation):
 
                 # 3 - Create the claim, along with its Items & Services
                 claim = update_or_create_claim(data, user)
-                # claim = create_draft_claim(data, user.id_for_audit)
 
                 # 4 - Start the submission process and look for errors
                 errors = []
