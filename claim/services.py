@@ -663,10 +663,10 @@ def set_claims_status(uuids, field, status, audit_data=None, user=None):
             elif hasattr(exc, 'args') and len(exc.args):
                 for m in exc.args:
                     errors.append({'message': m })
-        if len(remaining_uuid):
-            errors.append(_(
-                "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})                  
-                        
+    if len(remaining_uuid):
+        errors.append(_(
+            "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})
+
     return errors
 
 
@@ -721,6 +721,9 @@ def set_feedback_prompt_validity_to_to_current_date(claim_uuid):
 
 def update_claims_dedrems(uuids, user):
     # We could do it in one query with filter(claim__uuid__in=uuids) but we'd loose the logging
+    if not uuids:
+        # Additional check, empty uuids results in transaction error if uuids are queryset of uuids.
+        return []
     errors = []
     claims = Claim.objects.filter(uuid__in=uuids)
     remaining_uuid = list(map(str.upper,uuids))
