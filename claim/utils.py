@@ -53,3 +53,27 @@ def convert_date_to_datetime(date):
     time = datetime.datetime.min.time()
     new_datetime = datetime.datetime.combine(date, time)
     return new_datetime
+
+
+CLAIM_ELEMENTS_DECIMAL_FIELDS = [
+    "qty_provided",
+    "qty_approved",
+    "price_asked",
+    "price_adjusted",
+    "price_approved",
+    "price_valuated",
+    "limitation_value",
+    "remunerated_amount",
+    "deductable_amount",
+    "exceed_ceiling_amount",
+    "exceed_ceiling_amount_category",
+]
+
+
+def clean_review_decimals(data: list):
+    # Since the frontend sometimes sends "nan" as a value for decimal fields, and this cannot be stored in MSSQL
+    # This will clean input data and remove all Decimal("NaN") values to avoid any DB error
+    for claim_element in data:
+        for field in CLAIM_ELEMENTS_DECIMAL_FIELDS:
+            if field in claim_element and claim_element[field] and claim_element[field].is_nan():
+                claim_element.pop(field)

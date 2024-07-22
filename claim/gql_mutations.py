@@ -24,7 +24,7 @@ from claim.models import Claim, Feedback, FeedbackPrompt, ClaimDetail, ClaimItem
     ClaimDedRem
 from product.models import ProductItemOrService
 
-from claim.utils import process_items_relations, process_services_relations
+from claim.utils import process_items_relations, process_services_relations, clean_review_decimals
 from .services import check_unique_claim_code, delete_draft_claim, generate_potential_error_message_claim_draft, \
     prepare_reference_data_into_draft_claim_payload
 
@@ -822,6 +822,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
             claim.save_history()
             claim.adjustment = data.get('adjustment', None)
             items = data.pop('items') if 'items' in data else []
+            clean_review_decimals(items)
             all_rejected = True
             for item in items:
                 item_id = item.pop('id')
@@ -829,6 +830,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 if item['status'] == ClaimItem.STATUS_PASSED:
                     all_rejected = False
             services = data.pop('services') if 'services' in data else []
+            clean_review_decimals(services)
             for service in services:
                 service_id = service.pop('id')
                 claim.services.filter(id=service_id).update(**service)
