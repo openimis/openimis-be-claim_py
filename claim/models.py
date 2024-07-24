@@ -339,6 +339,13 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
                     )
         return queryset
 
+    def archive(self):
+        self.delete_history()
+        for item in self.items.filter(validity_to__isnull=True):
+            item.delete_history()
+        for service in self.services.filter(validity_to__isnull=True):
+            service.delete_history()
+
 
 class ClaimAttachmentsCount(models.Model):
     claim = models.OneToOneField(Claim, primary_key=True, related_name='attachments_count', on_delete=models.DO_NOTHING)

@@ -953,9 +953,10 @@ def set_claim_submitted(claim, errors, user):
         }
 
 
-def set_claim_deleted(claim):
+def set_claim_deleted(claim: Claim):
     try:
-        claim.delete_history()
+        logger.info(f"Deleting Claim - code={claim.code} - UUID={claim.uuid}")
+        claim.archive()
         return []
     except Exception as exc:
         return {
