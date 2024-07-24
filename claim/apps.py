@@ -9,7 +9,7 @@ DEFAULT_CFG = {
     "gql_query_claim_officers_perms": [],
     "gql_query_claim_diagnosis_variance_only_on_existing": True,
     "gql_mutation_create_claims_perms": ["111002"],
-    "gql_mutation_update_claims_perms": ["111010"],
+    "gql_mutation_update_claims_perms": ["111013"],
     "gql_mutation_load_claims_perms": ["111005"],
     "gql_mutation_submit_claims_perms": ["111007"],
     "gql_mutation_select_claim_feedback_perms": ["111010"],
