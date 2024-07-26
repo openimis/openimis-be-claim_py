@@ -932,7 +932,6 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
         Q(item__validity_to__isnull=True) | Q(item__validity_to__gte=target_date),
         validity_to__isnull=True,
         rejection_reason=0,
-        item__validity_from__lte=target_date,
         product__isnull=False,
         product__validity_to__isnull=True
     ).values("policy_id", "product_id")
@@ -940,7 +939,6 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False):
         Q(service__validity_to__isnull=True) | Q(service__validity_to__gte=target_date),
         validity_to__isnull=True,
         rejection_reason=0,
-        service__validity_from__date__lte=target_date,
         product__isnull=False, product__validity_to__isnull=True
     ).values("policy_id", "product_id")
     if items_query.count() == 0 and services_query.count() == 0:
