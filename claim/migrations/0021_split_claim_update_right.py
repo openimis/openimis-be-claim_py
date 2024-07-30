@@ -31,7 +31,7 @@ def remove_claim_update_right(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('claim', '0020_nhia_claim_details_report_rights'),
+        ('claim', '0017_set_managed_to_true'),
     ]
 
     operations = [
