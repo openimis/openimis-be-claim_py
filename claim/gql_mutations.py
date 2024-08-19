@@ -945,13 +945,13 @@ class DeleteClaimsMutation(OpenIMISMutation):
 def set_claim_submitted(claim, errors, user):
     try:
         claim.audit_user_id_submit = user.id_for_audit
+        from core.utils import TimeUtils
+        claim.submit_stamp = TimeUtils.now()
         if errors:
             claim.status = Claim.STATUS_REJECTED
         else:
             claim.approved = approved_amount(claim)
             claim.status = Claim.STATUS_CHECKED
-            from core.utils import TimeUtils
-            claim.submit_stamp = TimeUtils.now()
             claim.category = get_claim_category(claim)
         claim.save()
         return []
