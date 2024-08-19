@@ -769,8 +769,16 @@ class DeliverClaimsReviewMutation(OpenIMISMutation):
         logger.error("SaveClaimReviewMutation")
         if not user.has_perms(ClaimConfig.gql_mutation_deliver_claim_review_perms):
             raise PermissionDenied(_("unauthorized"))
-        errors = set_claims_status(data['uuids'], 'review_status', Claim.REVIEW_DELIVERED,
-                                   {'audit_user_id_review': user.id_for_audit})
+        from core import datetime
+        now = datetime.datetime.now()
+        errors = set_claims_status(
+            data['uuids'],
+            'review_status',
+            Claim.REVIEW_DELIVERED,
+            {
+                'audit_user_id_review': user.id_for_audit,
+                'validity_from_review': now,
+            })
         # OMT-208 update the dedrem for the reviewed claims
         errors += update_claims_dedrems(data["uuids"], user)
 
@@ -838,6 +846,9 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                     all_rejected = False
             claim.approved = approved_amount(claim)
             claim.audit_user_id_review = user.id_for_audit
+            from core import datetime
+            now = datetime.datetime.now()
+            claim.validity_from_review = now
             if all_rejected:
                 claim.status = Claim.STATUS_REJECTED
             claim.save()
