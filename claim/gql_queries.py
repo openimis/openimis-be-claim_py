@@ -57,7 +57,7 @@ class ClaimGQLType(DjangoObjectType):
     client_mutation_id = graphene.String()
     date_processed_to = graphene.Date()
     restore_id = graphene.Int()
-
+    
     def resolve_insuree(self, info):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
@@ -76,10 +76,11 @@ class ClaimGQLType(DjangoObjectType):
                 self.health_facility_id
             )
         return self.health_facility
-
+    
     def resolve_restore_id(self, info):
         return self.restore_id
-
+        
+        
     class Meta:
         model = Claim
         interfaces = (graphene.relay.Node,)
@@ -97,7 +98,6 @@ class ClaimGQLType(DjangoObjectType):
             "approved": ["exact", "lt", "lte", "gt", "gte"],
             "visit_type": ["exact"],
             "attachments_count__value": ["exact", "lt", "lte", "gt", "gte"],
-            "pre_authorization": ["exact"],
             **prefix_filterset("icd__", DiagnosisGQLType._meta.filter_fields),
             **prefix_filterset("admin__", ClaimAdminGQLType._meta.filter_fields),
             **prefix_filterset("health_facility__", HealthFacilityGQLType._meta.filter_fields),
@@ -191,7 +191,6 @@ class ClaimServiceGQLType(DjangoObjectType):
     class Meta:
         model = ClaimService
 
-
 class ClaimServiceServiceGQLType(DjangoObjectType):
     """
     Contains the Claim services within a specific Claim
@@ -199,7 +198,6 @@ class ClaimServiceServiceGQLType(DjangoObjectType):
 
     class Meta:
         model = ClaimServiceService
-
 
 class ClaimServiceItemGQLType(DjangoObjectType):
     """
