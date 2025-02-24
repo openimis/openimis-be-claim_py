@@ -517,7 +517,8 @@ class SubmitClaimsMutation(OpenIMISMutation):
             c_errors = []
             claim = Claim.objects \
                 .filter(uuid=claim_uuid,
-                        validity_to__isnull=True) \
+                        validity_to__isnull=True,
+                        status=Claim.STATUS_ENTERED) \
                 .prefetch_related("items") \
                 .prefetch_related("services") \
                 .first()
