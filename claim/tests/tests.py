@@ -2,7 +2,7 @@ import base64
 import json
 from dataclasses import dataclass
 from core.models import User
-from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase
+from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase, BaseTestContext
 from core.utils import filter_validity
 from core.test_helpers import create_test_interactive_user
 from django.conf import settings
@@ -13,7 +13,8 @@ from claim import schema as claim_schema
 from graphene.test import Client
 from graphene import Schema
 
-from claim.models import Claim, ClaimAdmin
+from claim.models import Claim
+from core.models.user import ClaimAdmin
 
 import datetime
 from policy.models import Policy
@@ -24,12 +25,6 @@ from insuree.test_helpers import create_test_insuree
 from location.models import Location
 from medical.test_helpers import create_test_service
 from medical_pricelist.test_helpers import add_service_to_hf_pricelist
-
-
-@dataclass
-class DummyContext:
-    """ Just because we need a context to generate. """
-    user: User
 
 
 class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
@@ -52,7 +47,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         cls.admin_user = create_test_interactive_user(
             username="testLocationAdmin")
         cls.admin_token = get_token(
-            cls.admin_user, DummyContext(user=cls.admin_user))
+            cls.admin_user, BaseTestContext(user=cls.admin_user))
         cls.schema = Schema(
             query=claim_schema.Query,
             mutation=claim_schema.Mutation
@@ -130,7 +125,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
 
     def execute_mutation(self, mutation):
         mutation_result = self.graph_client.execute(
-            mutation, context=DummyContext(user=self.admin_user))
+            mutation, context=BaseTestContext(user=self.admin_user))
         return mutation_result
 
     def test_mutation_create_claim(self):
@@ -215,7 +210,6 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
                 explanation: "why not"
                 qtyProvided: "2.00"
                 status: 1,
-                serviceItemSet: [],
                 serviceServiceSet: []
             }}
                 ]
@@ -229,7 +223,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
             }}
                 ''',
             headers={"HTTP_AUTHORIZATION": f"Bearer {self.admin_token}"})
-        self.get_mutation_result(
+        response = self.get_mutation_result(
             '3a90436b-d5ea-48e7-bde4-0bcff0240260', self.admin_token)
 
         # submit claim
@@ -292,6 +286,8 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
                 priceApproved: "5.00"
                 qtyApproved: "1.00"
                 status: 1
+                serviceServiceSet: [ ] 
+                serviceItemSet: [ ]
             }}]
           claimUuid: "{claim.uuid}"
           submitReview : false
@@ -323,6 +319,8 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
                 priceApproved: "5.00"
                 qtyApproved: "1.00"
                 status: 1
+                serviceServiceSet: [ ] 
+                serviceItemSet: [ ]
             }}]
           claimUuid: "{claim.uuid}"
           submitReview : true
@@ -336,12 +334,15 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         """,
             headers={"HTTP_AUTHORIZATION": f"Bearer {self.admin_token}"})
 
-        self.get_mutation_result(
+        result = self.get_mutation_result(
             'd44f5fd2-1f8d-4748-a7c2-7dea38bfde06', self.admin_token)
         
         
-        
+
+
 
         claim.refresh_from_db()
         self.assertEqual(claim.feedback_status, Claim.FEEDBACK_SELECTED)
         self.assertEqual(claim.review_status, Claim.REVIEW_DELIVERED)
+
+

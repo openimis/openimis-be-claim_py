@@ -47,12 +47,7 @@ class Query(graphene.ObjectType):
     claim_attachments = DjangoFilterConnectionField(
         ClaimAttachmentGQLType
     )
-    claim_admins = DjangoFilterConnectionField(
-        ClaimAdminGQLType,
-        search=graphene.String(),
-        region_uuid=graphene.String(),
-        district_uuid=graphene.String()
-    )
+
     claim_officers = DjangoFilterConnectionField(
         OfficerGQLType, search=graphene.String()
     )
@@ -201,42 +196,7 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
-    def resolve_claim_admins(
-            self,
-            info,
-            search=None,
-            **kwargs
-    ):
-        if not info.context.user.has_perms(
-                ClaimConfig.gql_query_claim_admins_perms
-        ):
-            raise PermissionDenied(_("unauthorized"))
-
-        hf_filters = [*filter_validity(**kwargs)]
-        district_uuid = kwargs.get('district_uuid', None)
-        region_uuid = kwargs.get('region_uuid', None)
-        if district_uuid is not None:
-            hf_filters += [Q(location__uuid=district_uuid)]
-        elif region_uuid is not None:
-            hf_filters += [Q(location__parent__uuid=region_uuid)]
-        if settings.ROW_SECURITY:
-            q = LocationManager().build_user_location_filter_query( info.context.user._u, prefix='location', loc_types=['D'])
-            if q:
-                hf_filters += [q]
-
-        user_health_facility = HealthFacility.objects.filter(*hf_filters)
-
-        filters = [*filter_validity(**kwargs)]
-        if user_health_facility:
-            filters += [Q(health_facility__in=user_health_facility)]
-
-        if search:
-            filters += [Q(code__icontains=search) |
-                        Q(last_name__icontains=search) |
-                        Q(other_names__icontains=search)]
-
-        return ClaimAdmin.objects.filter(*filters)
-
+    
     def resolve_claim_officers(self, info, search=None, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
             raise PermissionDenied(_("unauthorized"))

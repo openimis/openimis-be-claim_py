@@ -1,7 +1,7 @@
 import itertools
 import logging
 from collections import namedtuple
-
+from decimal import Decimal
 from claim.models import ClaimItem, Claim, ClaimService, ClaimDedRem, ClaimDetail, ClaimServiceService, ClaimServiceItem
 
 from core import utils
@@ -308,7 +308,7 @@ def frequency_check(qs, claim, elt):
         .annotate(target_date=Coalesce("claim__date_to", "claim__date_from")) \
         .filter(Q(rejection_reason=0) | Q(rejection_reason__isnull=True),
                 validity_to__isnull=True,
-                target_date__gte=td - delta,
+                target_date__range=(td - delta, td),
                 status=ClaimDetail.STATUS_PASSED,
                 claim__insuree_id=claim.insuree_id,
                 claim__status__gt=Claim.STATUS_ENTERED
@@ -905,27 +905,36 @@ def _get_dedrem(prefix, dedrem_type, field, product, insuree, demrems):
 # - Check each product associated with the claim, compute ceilings and maxes
 # - Go through each item and deduce
 # - Go through each service and deduce
-def process_dedrem(claim, audit_user_id=-1, is_process=False, policies=None, items=None, services=None):
+from datetime import datetime
+from django.db.models import Q
+import logging
+
+logger = logging.getLogger(__name__)
+
+def initialize_dedrem_processing(claim):
+    """Initialize basic claim processing parameters."""
     errors = []
     logger.debug(f"processing dedrem for claim {claim.uuid}")
     target_date = get_claim_target_date(claim)
     category = get_claim_category(claim)
-    if claim.date_from != target_date:
-        hospitalization = True
-    else:
-        hospitalization = False
+    hospitalization = claim.date_from != target_date
     hf_level = claim.health_facility.level
-    deducted = 0
-    remunerated = 0
-    # archiving old demrem
-    ClaimDedRem.objects.filter(claim_id=claim.id, *filter_validity()).update(validity_to=datetime.now())
+    return errors, target_date, category, hospitalization, hf_level
 
-    # TODO: it is not clear in the original code which policy_id was actually used, the latest one apparently...
+def archive_old_dedrems(claim):
+    """Archive existing dedrems for the claim."""
+    ClaimDedRem.objects.filter(claim_id=claim.id, *filter_validity()).update(
+        validity_to=datetime.now()
+    )
+
+def fetch_policies(claim, target_date, policies=None):
+    """Retrieve valid policies if not provided."""
     if not policies:
         policies = get_valid_policies_qs(claim.insuree.id, target_date)
+    return policies
 
-    # The original code has a pretty complex query here called product_loop that refers to policies while it is
-    # actually looping on ClaimItem and ClaimService.
+def fetch_items_and_services(claim, items=None, services=None):
+    """Retrieve claim items and services if not provided."""
     if items is None:
         items = list(claim.items.filter(
             item__isnull=False,
@@ -942,472 +951,580 @@ def process_dedrem(claim, audit_user_id=-1, is_process=False, policies=None, ite
         ).filter(
             Q(Q(rejection_reason=0) | Q(rejection_reason__isnull=True))
         ))
-    
-    policies_id = list(set((*[s.policy_id for s in services if s.policy_id is not None],
-                      *[i.policy_id for i in items if i.policy_id is not None],)))
+    return items, services
+
+def get_policy_and_product_info(policies, items, services, target_date):
+    """Extract policy and product information."""
+    policies_id = list(set(
+        (*[s.policy_id for s in services if s.policy_id is not None],
+         *[i.policy_id for i in items if i.policy_id is not None],)
+    ))
     products_id = list(set(p.product_id for p in policies if p.id in policies_id))
-    products = list(Product.objects.filter(*filter_validity(validity=target_date),
-                                   Q(Q(id__in=products_id) | Q(legacy_id__in=products_id))))
-    for policy_id in policies_id:
-        policy_members = InsureePolicy.objects.filter(
-            policy_id=policy_id,
-            effective_date__isnull=False,
-            effective_date__lte=target_date,
-            expiry_date__gte=target_date,
-            validity_to__isnull=True
-        ).count()
+    products = list(Product.objects.filter(
+        *filter_validity(validity=target_date),
+        Q(Q(id__in=products_id) | Q(legacy_id__in=products_id))
+    ))
+    return policies_id, products
+
+def calculate_hospital_visit(product, hospitalization, hf_level):
+    """Determine if the claim is a hospital visit."""
+    return (
+        (product.ceiling_interpretation == Product.CEILING_INTERPRETATION_IN_PATIENT 
+         and hospitalization)
+        or (product.ceiling_interpretation == Product.CEILING_INTERPRETATION_HOSPITAL 
+            and hf_level == "H")
+    )
+
+def get_policy_members(policy_id, target_date):
+    """Count policy members."""
+    return InsureePolicy.objects.filter(
+        policy_id=policy_id,
+        effective_date__isnull=False,
+        effective_date__lte=target_date,
+        expiry_date__gte=target_date,
+        validity_to__isnull=True
+    ).count()
+
+def initialize_deductibles_and_ceilings():
+    """Initialize deductible and ceiling tracking variables."""
+    return {
+        'deductible': None,
+        'ceiling': None,
+        'prev_deductible': None,
+        'prev_remunerated': 0,
+        'prev_remunerated_consult': 0,
+        'prev_remunerated_surgery': 0,
+        'prev_remunerated_hospitalization': 0,
+        'prev_remunerated_delivery': 0,
+        'prev_remunerated_antenatal': 0,
+        'remunerated_consultation': 0,
+        'remunerated_surgery': 0,
+        'remunerated_hospitalization': 0,
+        'remunerated_delivery': 0,
+        'remunerated_antenatal': 0,
+        'relative_prices': False
+    }
+
+def fetch_previous_dedrems(claim, policy_id):
+    """Retrieve previous dedrems excluding current claim."""
+    return list(
+        ClaimDedRem.objects.filter(
+            policy_id=policy_id
+        ).exclude(
+            claim_id=claim.id
+        )
+    )
+
+def calculate_deductibles_and_ceilings(product, claim, demrems, hospital_visit, policy_members):
+    """Calculate deductibles and ceilings based on product and policy."""
+    deductibles = initialize_deductibles_and_ceilings()
     
-        policy = next(iter([p for p in policies if p.id == policy_id]), None)
-        product = next(iter([p for p in products if p.id == policy.product_id or p.legacy_id == policy.product_id]), None)
-        
-        
-        hospital_visit = ( 
-            product.ceiling_interpretation == Product.CEILING_INTERPRETATION_IN_PATIENT 
-            and hospitalization == 1
-        ) or (
-            product.ceiling_interpretation == Product.CEILING_INTERPRETATION_HOSPITAL 
-            and hf_level == "H"
-        )
-        deductible = None
-        ceiling = None
-        # In previous stored procedure, some commented code fetched the amounts from sum(RemDelivery) from
-        # tblClaimDedRem where policy_id, insuree_id & claim_id <> this one
-        prev_deductible = None
-        prev_remunerated = 0
-        prev_remunerated_consult = 0
-        prev_remunerated_surgery = 0
-        prev_remunerated_hospitalization = 0
-        prev_remunerated_delivery = 0
-        prev_remunerated_antenatal = 0
-        remunerated_consultation = 0
-        remunerated_surgery = 0
-        remunerated_hospitalization = 0
-        remunerated_delivery = 0
-        remunerated_antenatal = 0
-        relative_prices = False
+    # General deductible
+    ded_g = _get_dedrem("ded", "G", "ded_g", product, claim.insuree, demrems)
+    if ded_g:
+        deductibles['deductible'] = ded_g
+        deductibles['prev_deductible'] = ded_g.prev
 
-        demrems = list(
-            ClaimDedRem.objects.filter(
-                policy_id=policy_id
-            ).exclude(
-                claim_id=claim.id
-            )
-        )
-        
+    # General ceiling
+    rem_g = _get_dedrem("max", "G", "rem_g", product, claim.insuree, demrems)
+    if rem_g:
+        deductibles['ceiling'] = rem_g
+        deductibles['prev_remunerated'] = rem_g.prev
 
-        ded_g = _get_dedrem("ded", "G", "ded_g", product, claim.insuree, demrems)
-        if ded_g:
-            deductible = ded_g
-            prev_deductible = deductible.prev
-
-        rem_g = _get_dedrem("max", "G", "rem_g", product, claim.insuree, demrems)
-        if rem_g:
-            ceiling = rem_g
-            prev_remunerated = rem_g.prev
-        if product.max_policy:
-            if policy_members > product.threshold:  # Threshold is NOT NULL
-                if product.max_policy_extra_member:
-                    ceiling = Deductible(
-                        product.max_policy + (policy_members - product.threshold) * product.max_policy_extra_member,
-                        ceiling.type,
-                        ceiling.prev)
-                if product.max_ceiling_policy and ceiling.amount > product.max_ceiling_policy:
-                    ceiling = Deductible(
-                        product.max_ceiling_policy,
-                        ceiling.type,
-                        ceiling.prev)
-            else:
-                ceiling = Deductible(
-                    product.max_policy,
-                    ceiling.type,
-                    ceiling.prev)
-
-        # Then check IP deductibles
-        if not deductible:
-            if hospital_visit:
-                # Hospital IP
-                ded_ip = _get_dedrem("ded_ip", "I", "ded_ip", product, claim.insuree, demrems)
-                if ded_ip:
-                    deductible = ded_ip
-                    prev_deductible = ded_ip.prev
-            else:
-                #  OP
-                ded_op = _get_dedrem("ded_op", "O", "ded_op", product, claim.insuree, demrems)
-                if ded_op:
-                    deductible = ded_op
-                    prev_deductible = ded_op.prev
-
-        if not ceiling:
-            if hospital_visit:
-                max_ip = _get_dedrem("max_ip", "I", "rem_ip", product, claim.insuree, demrems)
-                if max_ip:
-                    ceiling = max_ip
-                    prev_remunerated = max_ip.prev
-                if product.max_ip_policy:
-                    if policy_members > product.threshold:  # Threshold is NOT NULL
-                        if product.max_policy_extra_member_ip:
-                            ceiling = Deductible(
-                                product.max_ip_policy + (
-                                        policy_members - product.threshold) * product.max_policy_extra_member_ip,
-                                ceiling.type,
-                                ceiling.prev
-                            )
-                        if product.max_ceiling_policy_ip and ceiling.amount > product.max_ceiling_policy_ip:
-                            ceiling = Deductible(
-                                product.max_ceiling_policy_ip,
-                                ceiling.type,
-                                ceiling.prev
-                            )
-                    else:
-                        ceiling = Deductible(
-                            product.max_ip_policy,
-                            ceiling.type,
-                            ceiling.prev
-                        )
-            else:
-                max_op = _get_dedrem("max_op", "O", "rem_op", product, claim.insuree, demrems)
-                if max_op:
-                    ceiling = max_op
-                    prev_remunerated = max_op.prev
-                if product.max_op_policy:
-                    if product.threshold and policy_members > product.threshold:
-                        if product.max_policy_extra_member_op:
-                            ceiling = Deductible(
-                                product.max_op_policy + (
-                                        policy_members - product.threshold) * product.max_policy_extra_member_op,
-                                ceiling.type,
-                                ceiling.prev
-                            )
-                        if product.max_ceiling_policy_op and ceiling.amount > product.max_ceiling_policy_op:
-                            ceiling = Deductible(
-                                product.max_ceiling_policy_op,
-                                ceiling.type,
-                                ceiling.prev
-                            )
-                    else:
-                        ceiling = Deductible(
-                            product.max_op_policy,
-                            ceiling.type,
-                            ceiling.prev
-                        )
-                        
-        
-
-        # Loop through items
-        deducted = 0
-        remunerated = 0
-        for claim_detail in [
-            *[i for i in items if i.status==ClaimItem.STATUS_PASSED],
-            *[s for s in services if s.status==ClaimService.STATUS_PASSED],
-        ]:
-
-
-            detail_is_item = isinstance(claim_detail, ClaimItem)
-            itemsvc_quantity = claim_detail.qty_approved or claim_detail.qty_provided
-            set_price_deducted = 0
-            exceed_ceiling_amount = 0
-            exceed_ceiling_amount_category = 0
-            # TODO make sure that this does not return more than one row ?
-            itemsvc_pricelist_detail_qs = (ItemsPricelistDetail if detail_is_item else ServicesPricelistDetail).objects \
-                .filter(itemsvcs_pricelist=claim.health_facility.items_pricelist
-            if detail_is_item else claim.health_facility.services_pricelist,
-                        itemsvc=claim_detail.itemsvc,
-                        itemsvcs_pricelist__validity_to__isnull=True,
-                        )
-            itemsvc_pricelist_detail = get_queryset_valid_at_date(itemsvc_pricelist_detail_qs, target_date).first()
-            product_itemsvc = None
-
-            if detail_is_item:
-                product_itemsvc = ProductItem.objects.filter(
-                    product_id=claim_detail.product_id,
-                    item_id=claim_detail.item_id,
-                    validity_to__isnull=True
-                ).first()
-                if product_itemsvc is None:
-                    raise ValueError("Product Item not found")
-            else:
-                product_itemsvc = ProductService.objects.filter(
-                    product=claim_detail.product,
-                    service_id=claim_detail.service_id,
-                    validity_to__isnull=True
-                ).first()
-                if product_itemsvc is None:
-                    raise ValueError("Product Service not found")
-
-            pl_price = itemsvc_pricelist_detail.price_overrule if itemsvc_pricelist_detail.price_overrule \
-                else claim_detail.itemsvc.price
-
-            if claim_detail.price_approved is not None:
-                
-                set_price_adjusted = claim_detail.price_approved
-            if claim_detail.price_origin == ProductItemOrService.ORIGIN_CLAIM:
-                set_price_adjusted = claim_detail.price_asked
-                if ClaimConfig.verify_quantities:
-                    if not detail_is_item:
-                        service_price = None
-                        if claim_detail.service.packagetype == 'F':
-                            service_price = claim_detail.service.price
-                        if service_price and (claim_detail.price_adjusted or claim_detail.price_asked) > service_price:
-                            set_price_adjusted = service_price
-            else:
-                set_price_adjusted = pl_price
-                if ClaimConfig.verify_quantities:
-                    if not detail_is_item:
-                        contunue_service_check = True
-                        if claim_detail.service.packagetype == 'P':
-                            service_services = ServiceService.objects.filter(parent=claim_detail.service.id).all()
-                            claim_service_services = ClaimServiceService.objects.filter(claim_service=claim_detail.id).all()
-                            if len(service_services) == len(claim_service_services):
-                                for servservice in service_services:
-                                    for claimserviceservice in claim_service_services:
-                                        if servservice.service.id == claimserviceservice.service.id:
-                                            logger.debug(f"comparing serviceservice qty {servservice.qty_provided}\
-                                                and claimserviceservice qty {claimserviceservice.qty_displayed}")
-                                            if servservice.qty_provided != claimserviceservice.qty_displayed:
-                                                set_price_adjusted = 0
-                                                contunue_service_check = False
-                                                break
-                                    if contunue_service_check == False:
-                                        break
-                            else:
-                                # user misconfiguration !
-                                set_price_adjusted = 0
-                                contunue_service_check = False
-                            logger.debug(f"set_price_adjusted after service check {set_price_adjusted}")
-                            if contunue_service_check:
-                                contunue_item_check = True
-                                service_items = ServiceItem.objects.filter(parent=claim_detail.service.id).all()
-                                claim_service_items = ClaimServiceItem.objects.filter(claim_service=claim_detail.id).all()
-                                logger.debug(f"service_items: {service_items}")
-                                logger.debug(f"claim_service_items: {claim_service_items}")
-                                if len(service_items) == len(claim_service_items):
-                                    for serviceitem in service_items:
-                                        for claimservicesitem in claim_service_items:
-                                            if serviceitem.item.id == claimservicesitem.item.id:
-                                                logger.debug(f"comparing serviceitem qty {serviceitem.qty_provided}\
-                                                 and claimservicesitem qty {claimservicesitem.qty_displayed}")
-                                                if serviceitem.qty_provided != claimservicesitem.qty_displayed:
-                                                    set_price_adjusted = 0
-                                                    contunue_item_check = False
-                                                    break
-                                        if contunue_item_check == False:
-                                            break
-                                else:
-                                    # user misconfiguration !
-                                    set_price_adjusted = 0
-                                logger.debug(f"set_price_adjusted after items check {set_price_adjusted}")
-
-            work_value = int(itemsvc_quantity * set_price_adjusted)
-            set_unit_price_adjusted  = set_price_adjusted
-            if claim_detail.limitation == ProductItemOrService.LIMIT_FIXED_AMOUNT \
-                    and claim_detail.limitation_value \
-                    and (itemsvc_quantity * claim_detail.limitation_value) < work_value:
-                work_value = itemsvc_quantity * claim_detail.limitation_value
-
-            if deductible and deductible.amount - prev_deductible - deducted > 0:
-                if deductible.amount - deductible.prev - deducted >= work_value:
-                    set_price_deducted = work_value
-                    deducted += work_value
-                    # remunerated += 0 # why ?
-                    set_price_approved = 0
-                    set_price_remunerated = 0
-                else:
-                    # partial coverage
-                    set_price_deducted = deductible.amount - deductible.prev - deducted
-                    work_value -= set_price_deducted
-                    deducted += deductible.amount - deductible.prev - deducted
-
-            if claim_detail.limitation == ProductItemOrService.LIMIT_CO_INSURANCE and claim_detail.limitation_value:
-                work_value = claim_detail.limitation_value / 100 * work_value
-
-            if category != Service.CATEGORY_VISIT:
-                if product.max_amount_surgery and category == Service.CATEGORY_SURGERY:
-                    if work_value + prev_remunerated_surgery + remunerated_surgery <= product.max_amount_surgery:
-                        remunerated_surgery += work_value
-                    else:
-                        if prev_remunerated_surgery + remunerated_surgery >= product.max_amount_surgery:
-                            exceed_ceiling_amount_category = work_value
-                            # remunerated_surgery += 0
-                            work_value = 0
-                        else:
-                            exceed_ceiling_amount_category = work_value + prev_remunerated_surgery \
-                                                             + remunerated_surgery - product.max_amount_surgery
-                            work_value -= exceed_ceiling_amount_category
-                            remunerated_surgery += work_value
-                if product.max_amount_delivery and category == Service.CATEGORY_DELIVERY:
-                    if work_value + prev_remunerated_delivery + remunerated_delivery <= product.max_amount_delivery:
-                        remunerated_delivery += work_value
-                    else:
-                        if prev_remunerated_delivery + remunerated_delivery >= product.max_amount_delivery:
-                            exceed_ceiling_amount_category = work_value
-                            # remunerated_delivery += 0
-                            work_value = 0
-                        else:
-                            exceed_ceiling_amount_category = work_value + prev_remunerated_delivery \
-                                                             + remunerated_delivery - product.max_amount_delivery
-                            work_value -= exceed_ceiling_amount_category
-                            remunerated_delivery += work_value
-                if product.max_amount_antenatal and category == Service.CATEGORY_ANTENATAL:
-                    if work_value + prev_remunerated_antenatal + remunerated_antenatal <= product.max_amount_antenatal:
-                        remunerated_antenatal += work_value
-                    else:
-                        if prev_remunerated_antenatal + remunerated_antenatal >= product.max_amount_antenatal:
-                            exceed_ceiling_amount_category = work_value
-                            # remunerated_antenatal += 0
-                            work_value = 0
-                        else:
-                            exceed_ceiling_amount_category = work_value + prev_remunerated_antenatal \
-                                                             + remunerated_antenatal - product.max_amount_antenatal
-                            work_value -= exceed_ceiling_amount_category
-                            remunerated_antenatal += work_value
-                if product.max_amount_hospitalization and category == Service.CATEGORY_HOSPITALIZATION:
-                    if work_value + prev_remunerated_hospitalization + remunerated_hospitalization \
-                            <= product.max_amount_hospitalization:
-                        remunerated_hospitalization += work_value
-                    else:
-                        if prev_remunerated_hospitalization + remunerated_hospitalization \
-                                >= product.max_amount_hospitalization:
-                            exceed_ceiling_amount_category = work_value
-                            # remunerated_hospitalization += 0
-                            work_value = 0
-                        else:
-                            exceed_ceiling_amount_category = work_value + prev_remunerated_hospitalization \
-                                                             + remunerated_hospitalization \
-                                                             - product.max_amount_hospitalization
-                            work_value -= exceed_ceiling_amount_category
-                            remunerated_hospitalization += work_value
-                if product.max_amount_consultation and category == Service.CATEGORY_CONSULTATION:
-                    if work_value + prev_remunerated_consult + remunerated_consultation \
-                            <= product.max_amount_consultation:
-                        remunerated_consultation += work_value
-                    else:
-                        if prev_remunerated_consult + remunerated_consultation >= product.max_amount_consultation:
-                            exceed_ceiling_amount_category = work_value
-                            # remunerated_consult += 0
-                            work_value = 0
-                        else:
-                            exceed_ceiling_amount_category = work_value + prev_remunerated_consult \
-                                                             + remunerated_consultation - product.max_amount_consultation
-                            work_value -= exceed_ceiling_amount_category
-                            remunerated_consultation += work_value
-
-            # TODO big rework of this condition is needed. putting the ceiling_exclusion_? into a variable as first step
-
-                
- 
-            if product_itemsvc is not None and ((
-                  claim.insuree.is_adult and hospital_visit    
-                  and product_itemsvc.ceiling_exclusion_adult in ("B", "H")
-            ) or (claim.insuree.is_adult and not hospital_visit
-                  and product_itemsvc.ceiling_exclusion_adult in ("B", "N")
-            ) or (not claim.insuree.is_adult and hospital_visit
-                  and product_itemsvc.ceiling_exclusion_child in ("B", "H")
-            ) or (not claim.insuree.is_adult and not hospital_visit
-                  and product_itemsvc.ceiling_exclusion_child in ("B", "N")
-            )):
-                # NO CEILING WILL BE AFFECTED
-                exceed_ceiling_amount = 0
-                # remunerated += 0
-                # here in this case we do not add the amount to be added to the
-                # ceiling --> so exclude from the actual value to be entered against the insert into tblClaimDedRem
-                # in the end of the prod loop
-                set_price_approved = work_value
-                set_price_remunerated = work_value
-            else:
-                if ceiling and ceiling.amount > 0:
-                    if ceiling.amount - prev_remunerated - remunerated > 0:
-                        if ceiling.amount - prev_remunerated - remunerated >= work_value:
-                            exceed_ceiling_amount = 0
-                            set_price_approved = work_value
-                            set_price_remunerated = work_value
-                            remunerated += work_value
-                        else:
-                            total = ceiling.amount - prev_remunerated - remunerated
-                            exceed_ceiling_amount = work_value - total
-                            set_price_approved = total
-                            set_price_remunerated = total
-                            remunerated += total
-                    else:
-                        exceed_ceiling_amount = work_value
-                        # remunerated += 0
-                        set_price_approved = 0
-                        set_price_remunerated = 0
-                else:
-                    exceed_ceiling_amount = 0
-                    remunerated += work_value
-                    set_price_approved = work_value
-                    set_price_remunerated = work_value
-            # if price adjusted not using approved price in its calculation
-            if claim_detail.price_approved is None:
-                claim_detail.price_adjusted = set_unit_price_adjusted
-            # TODO here was NextItem target. Some "goto nextitem" above might have been replaced with a continue instead
-            if is_process:
-                if claim_detail.price_origin == ProductItemOrService.ORIGIN_RELATIVE:
-                    claim_detail.price_valuated = None
-                    claim_detail.deductable_amount = set_price_deducted
-                    claim_detail.exceed_ceiling_amount = exceed_ceiling_amount
-                    # TODO ExceedCeilingAmountCategory = ExceedCeilingAmountCategory ???
-                    relative_prices = True
-                else:
-                    claim_detail.price_valuated = set_price_approved
-                    claim_detail.deductable_amount = set_price_deducted
-                    claim_detail.exceed_ceiling_amount = exceed_ceiling_amount
-                    # TODO ExceedCeilingAmountCategory = ExceedCeilingAmountCategory ???
-                    claim_detail.remunerated_amount = set_price_remunerated
-                    # Don't touch relative_prices
-            claim_detail.save()
-
-        now = datetime.now()
-        claim_ded_rem_to_create = {
-            "policy": policy,
-            "insuree": claim.insuree,
-            "claim": claim,
-            "ded_g": deducted,
-            "rem_g": remunerated,
-            "rem_consult": remunerated_consultation,
-            "rem_hospitalization": remunerated_hospitalization,
-            "rem_delivery": remunerated_delivery,
-            "rem_antenatal": remunerated_antenatal,
-            "rem_surgery": remunerated_surgery,
-            "audit_user_id": audit_user_id,
-            "validity_from": now
-        }
-        if hospital_visit:
-            claim_ded_rem_to_create["ded_ip"] = deducted
-            claim_ded_rem_to_create["rem_ip"] = remunerated
+    # Adjust ceiling based on policy members
+    if product.max_policy:
+        if policy_members > product.threshold:
+            if product.max_policy_extra_member:
+                deductibles['ceiling'] = Deductible(
+                    product.max_policy + (policy_members - product.threshold) * product.max_policy_extra_member,
+                    deductibles['ceiling'].type,
+                    deductibles['ceiling'].prev
+                )
+            if product.max_ceiling_policy and deductibles['ceiling'].amount > product.max_ceiling_policy:
+                deductibles['ceiling'] = Deductible(
+                    product.max_ceiling_policy,
+                    deductibles['ceiling'].type,
+                    deductibles['ceiling'].prev
+                )
         else:
-            claim_ded_rem_to_create["ded_op"] = deducted
-            claim_ded_rem_to_create["rem_op"] = remunerated
+            deductibles['ceiling'] = Deductible(
+                product.max_policy,
+                deductibles['ceiling'].type,
+                deductibles['ceiling'].prev
+            )
 
-        ClaimDedRem.objects.create(**claim_ded_rem_to_create)
+    # IP/OP specific deductibles and ceilings
+    if not deductibles['deductible']:
+        if hospital_visit:
+            ded_ip = _get_dedrem("ded_ip", "I", "ded_ip", product, claim.insuree, demrems)
+            if ded_ip:
+                deductibles['deductible'] = ded_ip
+                deductibles['prev_deductible'] = ded_ip.prev
+        else:
+            ded_op = _get_dedrem("ded_op", "O", "ded_op", product, claim.insuree, demrems)
+            if ded_op:
+                deductibles['deductible'] = ded_op
+                deductibles['prev_deductible'] = ded_op.prev
 
-        if is_process:
-            claim.approved = remunerated
-            if relative_prices:
-                claim.status = Claim.STATUS_PROCESSED
+    if not deductibles['ceiling']:
+        if hospital_visit:
+            max_ip = _get_dedrem("max_ip", "I", "rem_ip", product, claim.insuree, demrems)
+            if max_ip:
+                deductibles['ceiling'] = max_ip
+                deductibles['prev_remunerated'] = max_ip.prev
+            if product.max_ip_policy:
+                if policy_members > product.threshold:
+                    if product.max_policy_extra_member_ip:
+                        deductibles['ceiling'] = Deductible(
+                            product.max_ip_policy + (
+                                policy_members - product.threshold) * product.max_policy_extra_member_ip,
+                            deductibles['ceiling'].type,
+                            deductibles['ceiling'].prev
+                        )
+                    if product.max_ceiling_policy_ip and deductibles['ceiling'].amount > product.max_ceiling_policy_ip:
+                        deductibles['ceiling'] = Deductible(
+                            product.max_ceiling_policy_ip,
+                            deductibles['ceiling'].type,
+                            deductibles['ceiling'].prev
+                        )
+                else:
+                    deductibles['ceiling'] = Deductible(
+                        product.max_ip_policy,
+                        deductibles['ceiling'].type,
+                        deductibles['ceiling'].prev
+                    )
+        else:
+            max_op = _get_dedrem("max_op", "O", "rem_op", product, claim.insuree, demrems)
+            if max_op:
+                deductibles['ceiling'] = max_op
+                deductibles['prev_remunerated'] = max_op.prev
+            if product.max_op_policy:
+                if product.threshold and policy_members > product.threshold:
+                    if product.max_policy_extra_member_op:
+                        deductibles['ceiling'] = Deductible(
+                            product.max_op_policy + (
+                                policy_members - product.threshold) * product.max_policy_extra_member_op,
+                            deductibles['ceiling'].type,
+                            deductibles['ceiling'].prev
+                        )
+                    if product.max_ceiling_policy_op and deductibles['ceiling'].amount > product.max_ceiling_policy_op:
+                        deductibles['ceiling'] = Deductible(
+                            product.max_ceiling_policy_op,
+                            deductibles['ceiling'].type,
+                            deductibles['ceiling'].prev
+                        )
+                else:
+                    deductibles['ceiling'] = Deductible(
+                        product.max_op_policy,
+                        deductibles['ceiling'].type,
+                        deductibles['ceiling'].prev
+                    )
+
+    return deductibles
+
+def get_pricelist_detail(claim, claim_detail, target_date, detail_is_item):
+    """Fetch pricelist detail for item or service."""
+    pricelist_detail_qs = (
+        ItemsPricelistDetail if detail_is_item else ServicesPricelistDetail
+    ).objects.filter(
+        itemsvcs_pricelist=(
+            claim.health_facility.items_pricelist
+            if detail_is_item
+            else claim.health_facility.services_pricelist
+        ),
+        itemsvc=claim_detail.itemsvc,
+        itemsvcs_pricelist__validity_to__isnull=True,
+    )
+    return get_queryset_valid_at_date(pricelist_detail_qs, target_date).first()
+
+def get_product_itemsvc(claim_detail, detail_is_item):
+    """Fetch product item or service."""
+    if detail_is_item:
+        product_itemsvc = ProductItem.objects.filter(
+            product_id=claim_detail.product_id,
+            item_id=claim_detail.item_id,
+            validity_to__isnull=True
+        ).first()
+    else:
+        product_itemsvc = ProductService.objects.filter(
+            product=claim_detail.product,
+            service_id=claim_detail.service_id,
+            validity_to__isnull=True
+        ).first()
+    
+    if product_itemsvc is None:
+        raise ValueError(f"Product {'Item' if detail_is_item else 'Service'} not found")
+    return product_itemsvc
+
+def calculate_price_adjusted(claim, claim_detail, itemsvc_pricelist_detail, detail_is_item):
+    """Calculate adjusted price for claim detail."""
+    pl_price = (
+        itemsvc_pricelist_detail.price_overrule
+        if itemsvc_pricelist_detail.price_overrule
+        else claim_detail.itemsvc.price
+    )
+
+    if claim_detail.price_approved is not None:
+        return claim_detail.price_approved
+
+    if claim_detail.price_origin == ProductItemOrService.ORIGIN_CLAIM:
+        set_price_adjusted = claim_detail.price_asked
+        if ClaimConfig.verify_quantities and not detail_is_item:
+            service_price = None
+            if claim_detail.service.packagetype == 'F':
+                service_price = claim_detail.service.price
+            if service_price and (claim_detail.price_adjusted or claim_detail.price_asked) > service_price:
+                return service_price
+        return set_price_adjusted
+
+    set_price_adjusted = pl_price
+    if ClaimConfig.verify_quantities and not detail_is_item:
+        set_price_adjusted = verify_service_quantities(claim_detail, set_price_adjusted)
+    return set_price_adjusted
+
+def verify_service_quantities(claim_detail, set_price_adjusted):
+    """Verify service quantities for package services."""
+    continue_service_check = True
+    if claim_detail.service.packagetype == 'P':
+        service_services = ServiceService.objects.filter(parent=claim_detail.service.id).all()
+        claim_service_services = ClaimServiceService.objects.filter(claim_service=claim_detail.id).all()
+        
+        if len(service_services) == len(claim_service_services):
+            for servservice in service_services:
+                for claimserviceservice in claim_service_services:
+                    if servservice.service.id == claimserviceservice.service.id:
+                        if servservice.qty_provided != claimserviceservice.qty_displayed:
+                            return 0
+                if not continue_service_check:
+                    break
+        else:
+            return 0
+
+        continue_item_check = True
+        service_items = ServiceItem.objects.filter(parent=claim_detail.service.id).all()
+        claim_service_items = ClaimServiceItem.objects.filter(claim_service=claim_detail.id).all()
+        
+        if len(service_items) == len(claim_service_items):
+            for serviceitem in service_items:
+                for claimservicesitem in claim_service_items:
+                    if serviceitem.item.id == claimservicesitem.item.id:
+                        if serviceitem.qty_provided != claimservicesitem.qty_displayed:
+                            return 0
+                if not continue_item_check:
+                    break
+        else:
+            return 0
+
+    return set_price_adjusted
+
+def process_claim_detail(claim, claim_detail, product, deductibles, category, hospital_visit, product_itemsvc, set_price_adjusted, itemsvc_quantity):
+    """Process individual claim item or service."""
+    work_value = int(itemsvc_quantity * set_price_adjusted)
+    set_unit_price_adjusted = set_price_adjusted
+    set_price_deducted = 0
+    exceed_ceiling_amount = 0
+    exceed_ceiling_amount_category = 0
+
+    # Apply fixed amount limitation
+    if (claim_detail.limitation == ProductItemOrService.LIMIT_FIXED_AMOUNT 
+        and claim_detail.limitation_value 
+        and (itemsvc_quantity * claim_detail.limitation_value) < work_value):
+        work_value = itemsvc_quantity * claim_detail.limitation_value
+
+    # Apply deductible
+    if deductibles['deductible'] and deductibles['deductible'].amount - deductibles['prev_deductible'] - deductibles['deducted'] > 0:
+        if deductibles['deductible'].amount - deductibles['deductible'].prev - deductibles['deducted'] >= work_value:
+            set_price_deducted = work_value
+            deductibles['deducted'] += work_value
+            set_price_approved = 0
+            set_price_remunerated = 0
+        else:
+            set_price_deducted = deductibles['deductible'].amount - deductibles['deductible'].prev - deductibles['deducted']
+            work_value -= set_price_deducted
+            deductibles['deducted'] += deductibles['deductible'].amount - deductibles['deductible'].prev - deductibles['deducted']
+
+    # Apply co-insurance
+    if claim_detail.limitation == ProductItemOrService.LIMIT_CO_INSURANCE and claim_detail.limitation_value:
+        work_value = claim_detail.limitation_value / 100 * work_value
+
+    # Apply category-specific ceilings
+    work_value, exceed_ceiling_amount_category = apply_category_ceilings(
+        product, category, work_value, deductibles
+    )
+
+    # Apply ceiling exclusions
+    set_price_approved, set_price_remunerated, exceed_ceiling_amount = apply_ceiling_exclusions(
+        claim, claim_detail, product_itemsvc, hospital_visit, work_value, deductibles
+    )
+
+    return {
+        'set_price_deducted': set_price_deducted,
+        'set_price_approved': set_price_approved,
+        'set_price_remunerated': set_price_remunerated,
+        'exceed_ceiling_amount': exceed_ceiling_amount,
+        'exceed_ceiling_amount_category': exceed_ceiling_amount_category,
+        'set_unit_price_adjusted': set_unit_price_adjusted,
+        'work_value': work_value
+    }
+
+def apply_category_ceilings(product, category, work_value, deductibles):
+    """Apply category-specific ceilings."""
+    exceed_ceiling_amount_category = 0
+    
+    category_checks = {
+        Service.CATEGORY_SURGERY: (
+            product.max_amount_surgery,
+            'remunerated_surgery',
+            'prev_remunerated_surgery'
+        ),
+        Service.CATEGORY_DELIVERY: (
+            product.max_amount_delivery,
+            'remunerated_delivery',
+            'prev_remunerated_delivery'
+        ),
+        Service.CATEGORY_ANTENATAL: (
+            product.max_amount_antenatal,
+            'remunerated_antenatal',
+            'prev_remunerated_antenatal'
+        ),
+        Service.CATEGORY_HOSPITALIZATION: (
+            product.max_amount_hospitalization,
+            'remunerated_hospitalization',
+            'prev_remunerated_hospitalization'
+        ),
+        Service.CATEGORY_CONSULTATION: (
+            product.max_amount_consultation,
+            'remunerated_consultation',
+            'prev_remunerated_consult'
+        )
+    }
+
+    if category != Service.CATEGORY_VISIT and category in category_checks:
+        max_amount, remunerated_key, prev_remunerated_key = category_checks[category]
+        if max_amount:
+            total_remunerated = (
+                work_value + 
+                deductibles[prev_remunerated_key] + 
+                deductibles[remunerated_key]
+            )
+            if total_remunerated <= max_amount:
+                deductibles[remunerated_key] += work_value
             else:
-                claim.status = Claim.STATUS_VALUATED
-                claim.remunerated = remunerated
-            claim.audit_user_id_process = audit_user_id
-            claim.process_stamp = now
-            claim.date_processed = now
-            if claim.feedback_status == Claim.FEEDBACK_SELECTED:
-                claim.feedback_status = Claim.FEEDBACK_BYPASSED
-            if claim.review_status == Claim.REVIEW_SELECTED:
-                claim.review_status = Claim.REVIEW_BYPASSED
+                if deductibles[prev_remunerated_key] + deductibles[remunerated_key] >= max_amount:
+                    exceed_ceiling_amount_category = work_value
+                    work_value = 0
+                else:
+                    exceed_ceiling_amount_category = (
+                        total_remunerated - max_amount
+                    )
+                    work_value -= exceed_ceiling_amount_category
+                    deductibles[remunerated_key] += work_value
 
-            
- 
-    if not products:
+    return work_value, exceed_ceiling_amount_category
+
+def apply_ceiling_exclusions(claim, claim_detail, product_itemsvc, hospital_visit, work_value, deductibles):
+    """Apply ceiling exclusions based on patient type and visit type."""
+    exceed_ceiling_amount = 0
+    set_price_approved = work_value
+    set_price_remunerated = work_value
+
+    if product_itemsvc and (
+        (claim.insuree.is_adult and hospital_visit 
+         and product_itemsvc.ceiling_exclusion_adult in ("B", "H"))
+        or (claim.insuree.is_adult and not hospital_visit
+            and product_itemsvc.ceiling_exclusion_adult in ("B", "N"))
+        or (not claim.insuree.is_adult and hospital_visit
+            and product_itemsvc.ceiling_exclusion_child in ("B", "H"))
+        or (not claim.insuree.is_adult and not hospital_visit
+            and product_itemsvc.ceiling_exclusion_child in ("B", "N"))
+    ):
+        exceed_ceiling_amount = 0
+    else:
+        if deductibles['ceiling'] and deductibles['ceiling'].amount > 0:
+            remaining_ceiling = (
+                deductibles['ceiling'].amount - 
+                deductibles['prev_remunerated'] - 
+                deductibles['remunerated']
+            )
+            if remaining_ceiling > 0:
+                if remaining_ceiling >= work_value:
+                    deductibles['remunerated'] += work_value
+                else:
+                    exceed_ceiling_amount = work_value - remaining_ceiling
+                    set_price_approved = remaining_ceiling
+                    set_price_remunerated = remaining_ceiling
+                    deductibles['remunerated'] += remaining_ceiling
+            else:
+                exceed_ceiling_amount = work_value
+                set_price_approved = 0
+                set_price_remunerated = 0
+        else:
+            deductibles['remunerated'] += work_value
+
+    return set_price_approved, set_price_remunerated, exceed_ceiling_amount
+
+def update_claim_detail(claim_detail, is_process, result, relative_prices):
+    """Update claim detail with processed values."""
+    if claim_detail.price_approved is None:
+        claim_detail.price_adjusted = result['set_unit_price_adjusted']
+
+    if is_process:
+        if claim_detail.price_origin == ProductItemOrService.ORIGIN_RELATIVE:
+            claim_detail.price_valuated = None
+            claim_detail.deductable_amount = result['set_price_deducted']
+            claim_detail.exceed_ceiling_amount = result['exceed_ceiling_amount']
+            relative_prices = True
+        else:
+            claim_detail.price_valuated = result['set_price_approved']
+            claim_detail.deductable_amount = result['set_price_deducted']
+            claim_detail.exceed_ceiling_amount = result['exceed_ceiling_amount']
+            claim_detail.remunerated_amount = result['set_price_remunerated']
+
+    claim_detail.save()
+    return relative_prices
+
+def create_claim_dedrem(claim, policy, audit_user_id, deductibles, hospital_visit):
+    """Create new ClaimDedRem record."""
+    now = datetime.now()
+    claim_ded_rem_to_create = {
+        "policy": policy,
+        "insuree": claim.insuree,
+        "claim": claim,
+        "ded_g": deductibles['deducted'],
+        "rem_g": deductibles['remunerated'],
+        "rem_consult": deductibles['remunerated_consultation'],
+        "rem_hospitalization": deductibles['remunerated_hospitalization'],
+        "rem_delivery": deductibles['remunerated_delivery'],
+        "rem_antenatal": deductibles['remunerated_antenatal'],
+        "rem_surgery": deductibles['remunerated_surgery'],
+        "audit_user_id": audit_user_id,
+        "validity_from": now
+    }
+    
+    if hospital_visit:
+        claim_ded_rem_to_create["ded_ip"] = deductibles['deducted']
+        claim_ded_rem_to_create["rem_ip"] = deductibles['remunerated']
+    else:
+        claim_ded_rem_to_create["ded_op"] = deductibles['deducted']
+        claim_ded_rem_to_create["rem_op"] = deductibles['remunerated']
+
+    ClaimDedRem.objects.create(**claim_ded_rem_to_create)
+
+def update_claim_status(claim, is_process, deductibles, audit_user_id, products):
+    """Update final claim status and related fields."""
+    now = datetime.now()
+    if deductibles == {}:
         logger.warning(f"claim {claim.uuid} did not have any item or service to valuate.")
         claim.status = Claim.STATUS_REJECTED
-        errors += [{'code': REJECTION_REASON_NO_PRODUCT_FOUND,
-                            'message': _("claim.validation.product_family.no_product_found") % {
-                            'code': claim.code,
-                            'element': 'all'},
-                        'detail': claim.uuid}]
+        return [{
+            'code': REJECTION_REASON_NO_PRODUCT_FOUND,
+            'message': _("claim.validation.") % {
+                'code': claim.code,
+                'element': 'all'
+            },
+            'detail': claim.uuid
+        }]
+    
+    elif is_process:
+        claim.approved = deductibles['remunerated']
+        
+        if deductibles['relative_prices']:
+            claim.status = Claim.STATUS_PROCESSED 
+            claim.remunerated = None
+        else:
+            claim.status = Claim.STATUS_VALUATED
+            claim.remunerated = deductibles['remunerated']
+        claim.audit_user_id_process = audit_user_id
+        claim.process_stamp = now
+        claim.date_processed = now
+        
+        if claim.feedback_status == Claim.FEEDBACK_SELECTED:
+            claim.feedback_status = Claim.FEEDBACK_BYPASSED
+        if claim.review_status == Claim.REVIEW_SELECTED:
+            claim.review_status = Claim.REVIEW_BYPASSED
 
-        # amount is 'locked' from the submit
-        # ... so re-creating the ClaimDedRem according to adjusted/valuated price
-    claim.save()    
-    return errors  # process_dedrem will never put the claim in error status (beside technical error and until it changes)
+    if not products:
+        logger.warning(f"claim {claim.uuid} is not covered by any product.")
+        claim.status = Claim.STATUS_REJECTED
+        return [{
+            'code': REJECTION_REASON_NO_PRODUCT_FOUND,
+            'message': _("claim.validation.product_family.no_item_or_service") % {
+                'code': claim.code,
+                'element': 'all'
+            },
+            'detail': claim.uuid
+        }]
+    
+    claim.save()
+    return []
+
+def process_dedrem(claim, audit_user_id=-1, is_process=False, policies=None, items=None, services=None):
+    """Main function to process claim deductions and remunerations."""
+    errors, target_date, category, hospitalization, hf_level = initialize_dedrem_processing(claim)
+    archive_old_dedrems(claim)
+    policies = fetch_policies(claim, target_date, policies)
+    items, services = fetch_items_and_services(claim, items, services)
+    policies_id, products = get_policy_and_product_info(policies, items, services, target_date)
+    claim_deductibles = {}
+    for policy_id in policies_id:
+        policy = next((p for p in policies if p.id == policy_id), None)
+        product = next((p for p in products if p.id == policy.product_id or p.legacy_id == policy.product_id), None)
+        if not policy or not product:
+            continue
+
+        hospital_visit = calculate_hospital_visit(product, hospitalization, hf_level)
+        policy_members = get_policy_members(policy_id, target_date)
+        demrems = fetch_previous_dedrems(claim, policy_id)
+        deductibles = calculate_deductibles_and_ceilings(product, claim, demrems, hospital_visit, policy_members)
+        deductibles['deducted'] = 0
+        deductibles['remunerated'] = 0
+
+        itmsrv =  [
+            *items,
+            *services
+        ]
+        
+        
+        for claim_detail in itmsrv:
+            if claim_detail.status not in [ClaimItem.STATUS_PASSED, ClaimService.STATUS_PASSED]:
+                continue
+                
+            detail_is_item = isinstance(claim_detail, ClaimItem)
+            itemsvc_quantity = claim_detail.qty_approved or claim_detail.qty_provided
+            
+            itemsvc_pricelist_detail = get_pricelist_detail(claim, claim_detail, target_date, detail_is_item)
+            product_itemsvc = get_product_itemsvc(claim_detail, detail_is_item)
+            set_price_adjusted = calculate_price_adjusted(claim, claim_detail, itemsvc_pricelist_detail, detail_is_item)
+            
+            result = process_claim_detail(
+                claim, claim_detail, product, deductibles, category,
+                hospital_visit, product_itemsvc, set_price_adjusted, itemsvc_quantity
+            )
+            
+            deductibles['relative_prices'] = update_claim_detail(
+                claim_detail, is_process, result, deductibles['relative_prices']
+            )
+
+        create_claim_dedrem(claim, policy, audit_user_id, deductibles, hospital_visit)
+        merge_deductible(claim_deductibles,deductibles)
+    errors.extend(update_claim_status(claim, is_process, claim_deductibles, audit_user_id, products))
+    return errors
+
+def merge_deductible(claim_deductibles,deductibles):
+    for k in deductibles.keys():
+        data = deductibles[k]
+        if k in claim_deductibles:
+            
+            if isinstance(data, bool):
+                claim_deductibles[k] = claim_deductibles[k] & deductibles[k]
+            elif isinstance(data, (int, float, Decimal)):
+                claim_deductibles[k] = claim_deductibles[k] + deductibles[k]
+            else:
+                claim_deductibles[k].append(deductibles[k])
+                
+        else:
+            if isinstance(data, (bool, int, float, Decimal)):
+                claim_deductibles[k] = deductibles[k]
+            else:
+                claim_deductibles[k] = [deductibles[k]]
+                    

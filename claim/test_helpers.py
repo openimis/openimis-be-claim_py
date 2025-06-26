@@ -1,4 +1,5 @@
-from claim.models import Claim, ClaimService, ClaimItem, ClaimDedRem, ClaimAdmin
+from claim.models import Claim, ClaimService, ClaimItem, ClaimDedRem
+from core.models.user import ClaimAdmin
 from claim.validations import get_claim_category
 from claim.utils import approved_amount
 from claim.services import claim_create, update_sum_claims
@@ -32,17 +33,25 @@ def create_test_claim(custom_props=None, user=DummyUser(), product=None):
         custom_props = {k: v for k, v in custom_props.items() if hasattr(Claim, k)} 
     from datetime import datetime, timedelta
     insuree = None
+    insuree_in_props = False
     if 'insuree' in custom_props:
         insuree = custom_props['insuree']
+        insuree_in_props = True
     elif 'insuree_id' in custom_props:
         insuree = Insuree.objects.filter(id=custom_props['insuree_id']).first()
+        insuree_in_props = True
     else:
         insuree = create_test_insuree()
         custom_props["insuree"] = insuree
-        
-    _to = datetime.now() - timedelta(days=1)
+    
+    if not insuree_in_props and not product:
+        product = create_test_product()
     if product:
-        create_test_policy2(product, insuree)
+        create_test_policy2(product, insuree)   
+         
+    _to = datetime.now() - timedelta(days=1)
+
+
     
     if 'icd' not in custom_props and 'icd_id' not in custom_props:
         custom_props['icd'] = create_test_diagnosis()
@@ -50,9 +59,18 @@ def create_test_claim(custom_props=None, user=DummyUser(), product=None):
         custom_props['icd'] = create_test_diagnosis(
             custom_props=custom_props['icd']
         )
+    if 'health_facility_id' not in custom_props and 'health_facility' not in custom_props:
+        custom_props['health_facility'] = create_test_health_facility()
+    if 'claim_admin' not in custom_props and 'claim_admin_id' not in custom_props:
+        if 'health_facility' in custom_props:
+            custom_props_ca={"health_facility":custom_props['health_facility']} 
+        else:
+            custom_props_ca={"health_facility_id":custom_props['health_facility_id']} 
+        custom_props['claim_admin'] = create_test_claim_admin(custom_props=custom_props_ca)  
+
+        
     claim = claim_create(
         {
-            "health_facility_id": 18,
             "date_from": datetime.now() - timedelta(days=2),
             "date_claimed": _to,
             "date_to": None,
@@ -62,7 +80,6 @@ def create_test_claim(custom_props=None, user=DummyUser(), product=None):
             **custom_props
         }, user
     )
-
     return claim
 
 
@@ -77,7 +94,7 @@ def create_test_claimitem(claim, item_type='D', valid=True, custom_props=None, p
             item = create_test_item(item_type, custom_props=custom_props)
         custom_props['item'] = item
     
-    custom_props = {k: v for k, v in custom_props.items() if hasattr(ClaimItem, k)} 
+    custom_props_item = {k: v for k, v in custom_props.items() if hasattr(ClaimItem, k)} 
     item = ClaimItem.objects.create(
         **{
             "claim": claim,
@@ -88,20 +105,22 @@ def create_test_claimitem(claim, item_type='D', valid=True, custom_props=None, p
             "validity_from": "2019-06-01",
             "validity_to": None if valid else "2019-06-01",
             "audit_user_id": -1,
-            **custom_props
+            **custom_props_item
            }
     )
     update_sum_claims(claim)
     if product:
+        custom_props_item = {k: v for k, v in custom_props.items() if hasattr(ProductItem, k)} 
         product_item = create_test_product_item(
             product,
             item.item,
-            custom_props={"price_origin": ProductItemOrService.ORIGIN_RELATIVE},
+            custom_props=custom_props_item,
         )
         pricelist_detail = add_item_to_hf_pricelist(
             item.item,
             hf_id=claim.health_facility.id
         )
+        claim.refresh_from_db()
     return item
 
 
@@ -116,8 +135,7 @@ def create_test_claimservice(claim, category='V', valid=True, custom_props=None,
         if not service:
             service = create_test_service(category, custom_props=custom_props)
         custom_props['service'] = service
-    
-    custom_props = {k: v for k, v in custom_props.items() if hasattr(ClaimService, k)}
+    custom_props_service = {k: v for k, v in custom_props.items() if hasattr(ClaimService, k)}
     service = ClaimService.objects.create(
         **{
             "claim": claim,
@@ -127,20 +145,22 @@ def create_test_claimservice(claim, category='V', valid=True, custom_props=None,
             "validity_from": "2019-06-01",
             "validity_to": None if valid else "2019-06-01",
             "audit_user_id": -1,
-            **custom_props
+            **custom_props_service
         }
     )    
     update_sum_claims(claim)
     if product:
+        custom_props_prod_service = {k: v for k, v in custom_props.items() if hasattr(ProductService, k)}
         create_test_product_service(
             product,
             service.service,
-            custom_props={"price_origin": ProductItemOrService.ORIGIN_RELATIVE},
+            custom_props=custom_props_prod_service,
         )
         add_service_to_hf_pricelist(
             service.service,
-            hf_id=claim.health_facility.id
+            hf_id=claim.health_facility_id
         )
+        claim.refresh_from_db()
     return service
 
 
@@ -172,7 +192,7 @@ def create_test_claim_admin(custom_props=None):
         custom_props = {}
     from core import datetime
     custom_props = {k: v for k, v in custom_props.items() if hasattr(ClaimAdmin, k)}
-    if "health_facility_id" not in custom_props and "health_facility_id" not in custom_props:
+    if "health_facility" not in custom_props and "health_facility_id" not in custom_props:
         custom_props['health_facility'] = create_test_health_facility(code=None, location_id=None)
 
     code = custom_props.pop('code', 'TST-CA')

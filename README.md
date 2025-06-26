@@ -63,7 +63,6 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * default_validations_disabled: bypass (defaul) claim validations in Submit and Process mutations (default: False)
 * gql_query_claims_perms: required rights to call claims GraphQL Query
   (default: `["111001"]`)
-* gql_query_claim_admins_perms: required rights to call claim_admins GraphQL Query (default: `[]`)
 * gql_query_claim_officers_perms: required rights to call claim_officers GraphQL Query (default: `[]`)
 * gql_mutation_create_claims_perms: required rights to call create_claim GraphQL Mutation (default: `["111002"]`)
 * gql_mutation_update_claims_perms: required rights to call update_claim GraphQL Mutation (default: `["111010"]`)

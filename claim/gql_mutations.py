@@ -38,7 +38,7 @@ from claim.services import validate_claim_data as service_validate_claim_data, \
             processing_claim as service_processing_claim,\
             create_feedback_prompt as service_create_feedback_prompt, update_claims_dedrems,\
                 set_feedback_prompt_validity_to_to_current_date, set_claims_status
-
+from claim.validations import REJECTION_REASON_INVALID_CLAIM
 from django.db import transaction
 import requests
 
@@ -875,14 +875,14 @@ class SaveClaimReviewMutation(OpenIMISMutation):
             claim_service_elements = []
             for service in services:
                 service_id = service.pop('id')
-                service_item_set = service.pop('service_service_set', [])
+                service_item_set = service.pop('service_item_set', [])
                 logger.debug(f"service_item_set {service_item_set}")
                 service_service_set = service.pop('service_service_set', [])
                 logger.debug(f"service_service_set {service_service_set} ")
                 claim.services.filter(id=service_id).update(**service)
                 for claim_service_service in service_service_set:
                     claim_service_code = claim_service_service.pop(
-                        'subServiceCode')
+                        'sub_service_code')
                     claim_service = claim.services.filter(
                         id=service_id).first()
                     if claim_service:
@@ -910,7 +910,7 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                                     **claim_service_service)
                         claim_service_elements.append(claim_service)
                 for claim_service_item in service_item_set:
-                    claim_item_code = claim_service_item.pop('subItemCode')
+                    claim_item_code = claim_service_item.pop('sub_item_code')
                     claim_service = claim.services.filter(
                         id=service_id).first()
                     if claim_service:

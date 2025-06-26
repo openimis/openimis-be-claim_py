@@ -17,96 +17,7 @@ from django.apps import apps
 from django.utils import timezone as django_tz
 
 core_config = apps.get_app_config('core')
-
-
-class ClaimAdmin(core_models.VersionedModel):
-    id = models.AutoField(db_column='ClaimAdminId', primary_key=True)
-    uuid = models.CharField(db_column='ClaimAdminUUID',
-                            max_length=36, default=uuid.uuid4, unique=True)
-
-    code = models.CharField(db_column='ClaimAdminCode', max_length=50,
-                            blank=True, null=True)
-    last_name = models.CharField(
-        db_column='LastName', max_length=100, blank=True, null=True)
-    other_names = models.CharField(
-        db_column='OtherNames', max_length=100, blank=True, null=True)
-    dob = models.DateField(db_column='DOB', blank=True, null=True)
-    email_id = models.CharField(
-        db_column='EmailId', max_length=200, blank=True, null=True)
-    phone = models.CharField(
-        db_column='Phone', max_length=50, blank=True, null=True)
-    health_facility = models.ForeignKey(
-        location_models.HealthFacility, models.DO_NOTHING, db_column='HFId', blank=True, null=True)
-    has_login = models.BooleanField(
-        db_column='HasLogin', blank=True, null=True)
-
-    audit_user_id = models.IntegerField(
-        db_column='AuditUserId', blank=True, null=True)
-    # row_id = models.BinaryField(db_column='RowId', blank=True, null=True)
-
-    def __str__(self):
-        return self.code + " " + self.last_name + " " + self.other_names
-
-    @classmethod
-    def get_queryset(cls, queryset, user):
-        queryset = cls.filter_queryset(queryset)
-        # GraphQL calls with an info object while Rest calls with the user itself
-        if isinstance(user, ResolveInfo):
-            user = user.context.user
-        if settings.ROW_SECURITY and user.is_anonymous:
-            return queryset.filter(id=-1)
-        if settings.ROW_SECURITY:
-            from location.schema import LocationManager
-            queryset = LocationManager().build_user_location_filter_query(
-                user._u, prefix='health_facility__location', queryset=queryset, loc_types=['D'])
-        return queryset
-
-    @property
-    def id_for_audit(self):
-        return self.audit_user_id
-
-    @property
-    def username(self):
-        return self.code
-
-    def get_username(self):
-        return self.code
-
-    @property
-    def is_staff(self):
-        return False
-
-    @property
-    def is_superuser(self):
-        return False
-
-    def set_password(self, raw_password):
-        raise NotImplementedError("Shouldn't set a password on an Officer")
-
-    def check_password(self, raw_password):
-        return False
-
-    @property
-    def officer_allowed_locations(self):
-        """
-        Returns uuid of all locations allowed for given officerLocationManager
-        """
-        district = self.health_facility.location
-        all_allowed_uuids = [district.parent.uuid, district.uuid]
-        child_locations = location_models.Location.objects.filter(
-            parent=district).values_list('uuid', flat=True)
-        while child_locations:
-            all_allowed_uuids.extend(child_locations)
-            child_locations = location_models.Location.objects\
-                .filter(parent__uuid__in=child_locations)\
-                .values_list('uuid', flat=True)
-
-        return location_models.Location.objects.filter(uuid__in=all_allowed_uuids)
-
-    class Meta:
-        managed = True
-        db_table = 'tblClaimAdmin'
-
+ClaimAdmin = core_models.ClaimAdmin
 
 class Feedback(core_models.VersionedModel):
     id = models.AutoField(db_column='FeedbackID', primary_key=True)
@@ -395,7 +306,7 @@ class ClaimMutation(core_models.UUIDModel):
         db_table = "claim_ClaimMutation"
 
 
-class ClaimDetailManager(models.Manager):
+class ClaimDetailManager(core_models.CachedManager):
 
     def filter(self, *args, **kwargs):
         keys = [x for x in kwargs if "itemsvc" in x]

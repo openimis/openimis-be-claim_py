@@ -8,11 +8,12 @@ from location.schema import HealthFacilityGQLType
 from medical.schema import DiagnosisGQLType
 from claim_batch.schema import BatchRunGQLType
 from .apps import ClaimConfig
-from claim.models import (ClaimDedRem, Claim, ClaimAdmin, Feedback, ClaimItem, ClaimService, ClaimAttachment,
+from claim.models import (ClaimDedRem, Claim, Feedback, ClaimItem, ClaimService, ClaimAttachment,
                           ClaimAttachmentType, ClaimServiceService, ClaimServiceItem)
+from core.models.user import ClaimAdmin
 from django.utils.translation import gettext as _
 from django.core.exceptions import PermissionDenied
-
+from core.schema import ClaimAdminGQLType
 
 class ClaimDedRemGQLType(DjangoObjectType):
     """
@@ -22,28 +23,6 @@ class ClaimDedRemGQLType(DjangoObjectType):
         model = ClaimDedRem
         interfaces = (graphene.relay.Node,)
 
-
-class ClaimAdminGQLType(DjangoObjectType):
-    """
-    Details about a Claim Administrator
-    """
-
-    class Meta:
-        model = ClaimAdmin
-        interfaces = (graphene.relay.Node,)
-        filter_fields = {
-            "uuid": ["exact"],
-            "code": ["exact", "icontains"],
-            "last_name": ["exact", "icontains"],
-            "other_names": ["exact", "icontains"],
-            **prefix_filterset("health_facility__", HealthFacilityGQLType._meta.filter_fields),
-        }
-        connection_class = ExtendedConnection
-
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        queryset = queryset.filter(*filter_validity())
-        return queryset
 
 
 class ClaimGQLType(DjangoObjectType):

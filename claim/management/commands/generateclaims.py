@@ -1,7 +1,7 @@
 import random
 import string
 
-from claim.models import ClaimAdmin
+from core.models.user import ClaimAdmin
 from claim.test_helpers import create_test_claim, create_test_claimservice, create_test_claimitem
 from django.core.management.base import BaseCommand
 from insuree.models import Insuree

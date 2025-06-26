@@ -304,10 +304,10 @@ class ClaimReportService(object):
             "insuree": str(claim.insuree),
             "claimAdmin": str(claim.admin) if claim.admin else None,
             "icd": str(claim.icd),
-            "icd1": str(claim.icd1) if claim.icd_1 else None,
-            "icd2": str(claim.icd1) if claim.icd_2 else None,
-            "icd3": str(claim.icd1) if claim.icd_3 else None,
-            "icd4": str(claim.icd1) if claim.icd_4 else None,
+            "icd1": str(claim.icd_1) if claim.icd_1 else None,
+            "icd2": str(claim.icd_2) if claim.icd_2 else None,
+            "icd3": str(claim.icd_3) if claim.icd_3 else None,
+            "icd4": str(claim.icd_4) if claim.icd_4 else None,
             "guarantee": claim.guarantee_id,
             "visitType": claim.visit_type,
             "claimed": claim.claimed,
@@ -561,8 +561,28 @@ def set_claim_submitted(claim, errors, user):
                 'detail': claim.uuid}]
         }
 
-  
+ #  
 def processing_claim(claim, user, is_process=False, validate=True):
+    """
+    Process a claim by validating it, assigning products, and handling deductions/remunerations.
+
+    Args:
+        claim: The claim object to process.
+        user: The user performing the claim processing.
+        is_process (bool, optional): If True, sets the claim as processed or valuated. Defaults to False.
+        validate (bool, optional): If True, validates the claim and assigns products. Defaults to True.
+
+    Returns:
+        list: A list of errors encountered during processing. An empty list indicates successful processing.
+
+    Notes:
+        - Retrieves valid policies for the claim's insuree based on the target date.
+        - Validates the claim and assigns products to claim items/services if `validate` is True.
+        - Processes deductions/remunerations (dedrem) if no errors occur.
+        - Clears dedrem if errors are found (e.g., invalid claim after review).
+        - Logs key steps (validation, assignment, dedrem processing) for debugging.
+        - If `is_process` is True, updates the claim status to processed or valuated.
+    """
     errors = []
     items = None
     services = None
@@ -643,10 +663,10 @@ def set_claims_status(uuids, field, status, audit_data=None, user=None):
     errors = []
     claims = Claim.objects \
             .filter(uuid__in=uuids,
-                    *filter_validity()) 
-    remaining_uuid = list(map(str.upper,uuids))
+                    *filter_validity())
+    remaining_uuid = list(set(map(str.upper, uuids)))
     for claim in claims:
-        remaining_uuid.remove(claim.uuid.upper())        
+        remaining_uuid.remove(claim.uuid.upper())
         try:
             claim.save_history()
             setattr(claim, field, status)
@@ -672,8 +692,9 @@ def set_claims_status(uuids, field, status, audit_data=None, user=None):
                 for m in exc.args:
                     errors.append({'message': m })
     if len(remaining_uuid):
-        errors.append(_(
-            "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})
+        errors += [
+            {'message': _("claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)}}
+        ]
 
     return errors
 
