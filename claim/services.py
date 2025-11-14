@@ -769,3 +769,54 @@ def update_claims_dedrems(uuids, user, claims=None):
         errors.append(_(
             "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})
     return errors
+
+def handle_claim_subscription_notification(sender, **kwargs):
+    """
+    Handle claim notification logic for successful claim creation.
+    """
+    try:
+        # Check if claim notifications are enabled in R4ClaimConfig
+        from api_fhir_r4.configurations import R4ClaimConfig
+        from openIMIS.openimisapps import openimis_apps
+        
+        imis_modules = openimis_apps()
+        
+        if 'claim' not in imis_modules or not R4ClaimConfig.get_subscribe_claim_signal():
+            logger.debug("Claim subscription is disabled, skipping notification")
+            return
+            
+
+        mutation_data = kwargs.get('data', {})
+        claim_code = mutation_data.get('code')
+        user = kwargs.get('user')
+        
+        if claim_code and user:
+            # from .models import Claim
+            claim = Claim.objects.filter(
+                code=claim_code, 
+                validity_to__isnull=True
+            ).first()
+            
+            if claim:
+                logger.info(f"Processing subscription for claim {claim.uuid} on behalf of user {user.username}")
+                from api_fhir_r4.converters import ClaimResponseConverter
+                from api_fhir_r4.signals import notify_subscribers
+                
+                converter_instance = ClaimResponseConverter(user=user)
+                logger.debug(f"Processing subscription for created claim: {claim.uuid}")
+                notify_subscribers(
+                    claim,
+                    converter_instance,
+                    'Claim',
+                    None
+                )
+            else:
+                logger.warning(f"Could not find created claim with code: {claim_code}")
+        else:
+            if not claim_code:
+                logger.warning("No claim code found in mutation data for notification")
+            if not user:
+                logger.warning("No user found in mutation data for notification")
+                
+    except Exception as e:
+        logger.error("Error while processing Claim Subscription from web", exc_info=e)
