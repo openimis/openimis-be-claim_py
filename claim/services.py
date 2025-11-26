@@ -15,7 +15,7 @@ from core.signals import register_service_signal
 from .apps import ClaimConfig
 from django.conf import settings
 
-from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimDedRem, FeedbackPrompt
+from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimDedRem, FeedbackPrompt, ReturnedClaim
 from product.models import ProductItemOrService
 from policy.models import Policy
 from claim.utils import (
@@ -538,7 +538,23 @@ def validate_number_of_additional_diagnoses(incoming_data):
 
     return additional_diagnoses_count <= ClaimConfig.additional_diagnosis_number_allowed
 
-
+def return_claim( data, user):
+    from core.utils import TimeUtils
+    # claim = Claim.objects.get(uuid=data['uuid'])
+    claim = Claim.objects \
+            .filter(uuid__in=data['uuid'],
+                    *filter_validity()).first()
+    claim.save_history()
+    claim.status = data['return_type']
+    claim.save()
+    ReturnedClaim.objects.create(
+        claim=claim,
+        predefined_reason=data['predefined_reason'],
+        reason=data['reason'],
+        return_type=data['return_type'],
+        audit_user_id=user.id_for_audit,
+        returned_date=TimeUtils.now()
+    )
 
 def set_claim_submitted(claim, errors, user):
     try:

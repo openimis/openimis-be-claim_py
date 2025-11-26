@@ -244,6 +244,20 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
                         user._u, prefix='health_facility__location', queryset=queryset, loc_types=['D'])
         return queryset
 
+class ReturnedClaim(models.Model):
+    id = models.AutoField(db_column='ReturnedClaimID', primary_key=True)
+    claim = models.ForeignKey(Claim, models.DO_NOTHING, db_column='ClaimID', related_name="return_reason")
+    returned_date = fields.DateTimeField(db_column='ReturnedDate')
+    audit_user_id = models.IntegerField(db_column='AuditUserID')
+    reason = models.TextField(db_column='Reason', blank=True, null=True)
+    predefined_reason = models.TextField(db_column='PredefinedReason')
+    return_type = models.IntegerField(db_column='ReturnType')
+    class Meta:
+        managed = True
+        db_table = 'tblReturnedClaim'
+
+    RETURNED_FROM_FACILITY = 32
+    RETURNED_FROM_BRANCH = 64
 
 class FeedbackPrompt(core_models.VersionedModel):
     id = models.AutoField(db_column='FeedbackPromptID', primary_key=True)
