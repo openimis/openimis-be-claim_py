@@ -785,3 +785,34 @@ def update_claims_dedrems(uuids, user, claims=None):
         errors.append(_(
             "claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)})
     return errors
+
+def update_claims_status(uuids, field, status, user):
+    errors = []
+    claims = Claim.objects \
+            .filter(uuid__in=uuids,
+                    *filter_validity())
+    remaining_uuid = list(set(map(str.upper, uuids)))
+    for claim in claims:
+        remaining_uuid.remove(claim.uuid.upper())
+        try:
+            claim.save_history()
+            setattr(claim, field, status)
+            claim.audit_user_id = user.user.id_for_audit
+            claim.save()
+        except Exception as exc:
+            errors += [
+                {'message': _("claim.mutation.failed_to_change_status_of_claim") %
+                            {'code': claim.code} }
+            ]
+            if hasattr(exc, 'messages') and len(exc.messages):
+                for m in exc.messages:
+                    errors.append({'message': m })
+            elif hasattr(exc, 'args') and len(exc.args):
+                for m in exc.args:
+                    errors.append({'message': m })
+    if len(remaining_uuid):
+        errors += [
+            {'message': _("claim.validation.id_does_not_exist") % {'id': ','.join(remaining_uuid)}}
+        ]
+
+    return errors

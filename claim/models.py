@@ -188,6 +188,13 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     STATUS_CHECKED = 4
     STATUS_PROCESSED = 8
     STATUS_VALUATED = 16
+    STATUS_RETURNED_FROM_FACILITY = 17
+    STATUS_RETURNED_FROM_BRANCH = 18
+    STATUS_SUBMITTED_TO_HEAD = 19
+    STATUS_RESUBMITTED_TO_HEAD = 20
+    STATUS_RESUBMITTED_TO_BRANCH = 21
+    STATUS_FLAGGED = 22
+    
 
     FEEDBACK_IDLE = 1
     FEEDBACK_NOT_SELECTED = 2
@@ -412,6 +419,8 @@ class ClaimItem(core_models.VersionedModel, ClaimDetail, core_models.ExtendableM
     exceed_ceiling_amount_category = models.DecimalField(
         db_column='ExceedCeilingAmountCategory', max_digits=18, decimal_places=2, blank=True, null=True)
     objects = ClaimDetailManager()
+    availability = models.BooleanField(db_column="availability")
+
 
     class Meta:
         managed = True
@@ -516,6 +525,7 @@ class ClaimService(core_models.VersionedModel, ClaimDetail, core_models.Extendab
     exceed_ceiling_amount_category = models.DecimalField(
         db_column='ExceedCeilingAmountCategory', max_digits=18, decimal_places=2, blank=True, null=True)
     objects = ClaimDetailManager()
+    availability = models.BooleanField(db_column="availability")
 
     class Meta:
         managed = True

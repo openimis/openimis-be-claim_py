@@ -37,7 +37,7 @@ from claim.services import validate_claim_data as service_validate_claim_data, \
         update_or_create_claim as service_update_or_create_claim, check_unique_claim_code, ClaimSubmitService,\
             processing_claim as service_processing_claim,\
             create_feedback_prompt as service_create_feedback_prompt, update_claims_dedrems,\
-                set_feedback_prompt_validity_to_to_current_date, set_claims_status , return_claim
+                set_feedback_prompt_validity_to_to_current_date, set_claims_status , return_claim, update_claims_status
 from claim.validations import REJECTION_REASON_INVALID_CLAIM
 from django.db import transaction
 import requests
@@ -994,7 +994,40 @@ class SaveClaimReviewMutation(OpenIMISMutation):
                 'message': _("claim.mutation.failed_to_update_claim") % {'code': claim.code if claim else None},
                 'detail': str(exc)}]
 
+class ChangeClaimsStatusMutation(OpenIMISMutation):
+    """
+    Change the status of one or more claims
+    """
+    _mutation_module = "claim"
+    _mutation_class = "ChangeClaimsStatusMutation"
 
+    class Input(OpenIMISMutation.Input):
+        uuids = graphene.List(graphene.String)
+        status = graphene.Int()
+
+    @classmethod
+    def async_mutate(cls, user, **data):
+        try:
+            # TODO move this verification to OIMutation
+            if type(user) is AnonymousUser or not user.id:
+                raise ValidationError(
+                    _("mutation.authentication_required"))
+            status = data.get("status")
+            if status == Claim.STATUS_SUBMITTED_TO_HEAD and not user.has_perms(ClaimConfig.gql_mutation_submit_claims_to_head_perms):
+                raise PermissionDenied(_("unauthorized"))
+            if status == Claim.STATUS_RESUBMITTED_TO_HEAD and not user.has_perms(ClaimConfig.gql_mutation_resubmit_claims_to_head_perms):
+                raise PermissionDenied(_("unauthorized"))
+            if status == Claim.STATUS_RESUBMITTED_TO_BRANCH and not user.has_perms(ClaimConfig.gql_mutation_resubmit_claims_to_branch_perms):
+                raise PermissionDenied(_("unauthorized"))
+            if status == Claim.STATUS_RESUBMITTED_TO_HEAD and not user.has_perms(ClaimConfig.gql_mutation_resubmit_claims_to_head_perms):
+                raise PermissionDenied(_("unauthorized"))
+            if status == Claim.STATUS_FLAGGED and not user.has_perms(ClaimConfig.gql_mutation_flag_claims_perms):
+                raise PermissionDenied(_("unauthorized"))
+            return update_claims_status(data['uuids'], 'status', status, user=user)
+        except Exception as exc:
+            return [{
+                'message': _("claim.mutation.failed_to_create_claim") % {'code': data['code']},
+                'detail': str(exc)}]
 class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
     """
     Process one or several claims.

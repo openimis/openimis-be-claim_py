@@ -249,7 +249,7 @@ class Mutation(graphene.ObjectType):
     skip_claims_review = SkipClaimsReviewMutation.Field()
     process_claims = ProcessClaimsMutation.Field()
     delete_claims = DeleteClaimsMutation.Field()
-
+    change_claims_status = ChangeClaimsStatusMutation.Field()
 
 def on_claim_mutation(sender, **kwargs):
     uuids = kwargs["data"].get("uuids", [])
