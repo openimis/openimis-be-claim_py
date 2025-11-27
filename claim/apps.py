@@ -9,6 +9,7 @@ DEFAULT_CFG = {
     "gql_query_claim_diagnosis_variance_only_on_existing": True,
     "gql_mutation_create_claims_perms": ["111002"],
     "gql_mutation_update_claims_perms": ["111010"],
+    "gql_mutation_return_claims_perms": ["111013"],
     "gql_mutation_load_claims_perms": ["111005"],
     "gql_mutation_submit_claims_perms": ["111007"],
     "gql_mutation_select_claim_feedback_perms": ["111010"],
@@ -22,6 +23,12 @@ DEFAULT_CFG = {
     "gql_mutation_process_claims_perms": ["111011"],
     "gql_mutation_restore_claims_perms": ["111012"],
     "gql_mutation_delete_claims_perms": ["111004"],
+    "gql_mutation_submit_claims_to_head_perms" : ["111014"],
+    "gql_mutation_resubmit_claims_to_head_perms" : ["111015"],
+    "gql_mutation_resubmit_claims_to_branch_perms" : ["111016"],
+    "gql_mutation_flag_claims_perms" : ["111017"],
+    "gql_mutation_approve_claims_perms" : ["111018"],
+    "gql_mutation_reject_claims_perms" : ["111019"],
     "claim_print_perms": ["111006"],
     "claim_attachments_root_path": None,
     "claim_uspUpdateClaimFromPhone_intermediate_sets": 2,
@@ -46,6 +53,7 @@ class ClaimConfig(AppConfig):
     gql_query_claim_diagnosis_variance_only_on_existing = None
     gql_mutation_create_claims_perms = []
     gql_mutation_update_claims_perms = []
+    gql_mutation_return_claims_perms = []
     gql_mutation_load_claims_perms = []
     gql_mutation_submit_claims_perms = []
     gql_mutation_select_claim_feedback_perms = []
@@ -59,6 +67,12 @@ class ClaimConfig(AppConfig):
     gql_mutation_process_claims_perms = []
     gql_mutation_restore_claims_perms = []
     gql_mutation_delete_claims_perms = []
+    gql_mutation_submit_claims_to_head_perms = []
+    gql_mutation_resubmit_claims_to_head_perms = []
+    gql_mutation_resubmit_claims_to_branch_perms = []
+    gql_mutation_flag_claims_perms = []
+    gql_mutation_approve_claims_perms = []
+    gql_mutation_reject_claims_perms = []
     claim_print_perms = []
     claim_attachments_root_path = None
     claim_uspUpdateClaimFromPhone_intermediate_sets = None

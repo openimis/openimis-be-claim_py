@@ -23,8 +23,12 @@ class ClaimDedRemGQLType(DjangoObjectType):
         model = ClaimDedRem
         interfaces = (graphene.relay.Node,)
 
-
-
+class ReturnedClaimGQLType(graphene.ObjectType):
+    id = graphene.Int()
+    returned_date = graphene.DateTime()
+    reason = graphene.String()
+    predefined_reason = graphene.String()
+    return_type = graphene.Int()
 class ClaimGQLType(DjangoObjectType):
     """
     Main element for a Claim. It can contain items and/or services.
@@ -36,6 +40,7 @@ class ClaimGQLType(DjangoObjectType):
     client_mutation_id = graphene.String()
     date_processed_to = graphene.Date()
     restore_id = graphene.Int()
+    return_reasons = graphene.List(ReturnedClaimGQLType)
 
     def resolve_insuree(self, info):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
@@ -106,7 +111,10 @@ class ClaimGQLType(DjangoObjectType):
         claim_mutation = self.mutations.select_related(
             'mutation').filter(mutation__status=0).first()
         return claim_mutation.mutation.client_mutation_id if claim_mutation else None
-
+    def resolve_return_reasons(self, info):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        return self.return_reason.all()
     @classmethod
     def get_queryset(cls, queryset, info):
         return Claim.get_queryset(queryset, info).all()

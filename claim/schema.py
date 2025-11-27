@@ -233,6 +233,7 @@ class Query(graphene.ObjectType):
 class Mutation(graphene.ObjectType):
     create_claim = CreateClaimMutation.Field()
     update_claim = UpdateClaimMutation.Field()
+    return_claim = ReturnClaimMutation.Field()
     create_claim_attachment = CreateAttachmentMutation.Field()
     update_claim_attachment = UpdateAttachmentMutation.Field()
     delete_claim_attachment = DeleteAttachmentMutation.Field()
@@ -248,7 +249,7 @@ class Mutation(graphene.ObjectType):
     skip_claims_review = SkipClaimsReviewMutation.Field()
     process_claims = ProcessClaimsMutation.Field()
     delete_claims = DeleteClaimsMutation.Field()
-
+    change_claims_status = ChangeClaimsStatusMutation.Field()
 
 def on_claim_mutation(sender, **kwargs):
     uuids = kwargs["data"].get("uuids", [])

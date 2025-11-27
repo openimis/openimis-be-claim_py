@@ -223,12 +223,11 @@ def validate_claimitem_in_price_list(claim, claimitem):
     target_date = get_claim_target_date(claim)
     pricelist_detail_qs = ItemsPricelistDetail.objects \
         .filter(item_id=claimitem.item_id,
-                validity_to__isnull=True,
+                 *filter_validity(validity=target_date),
                 items_pricelist=claim.health_facility.items_pricelist,
                 items_pricelist__validity_to__isnull=True
                 )
-    pricelist_detail = get_queryset_valid_at_date(pricelist_detail_qs, target_date).first()
-    if not pricelist_detail:
+    if not pricelist_detail_qs:
         claimitem.rejection_reason = REJECTION_REASON_NOT_IN_PRICE_LIST
         errors += [{'code': REJECTION_REASON_NOT_IN_PRICE_LIST,
                     'message': _("claim.validation.claimitem_in_price_list_validity") % {
@@ -243,11 +242,11 @@ def validate_claimservice_in_price_list(claim, claimservice):
     target_date = get_claim_target_date(claim)
     pricelist_detail_qs = ServicesPricelistDetail.objects \
         .filter(service_id=claimservice.service_id,
+                 *filter_validity(validity=target_date),
                 services_pricelist=claim.health_facility.services_pricelist,
                 services_pricelist__validity_to__isnull=True
                 )
-    pricelist_detail = get_queryset_valid_at_date(pricelist_detail_qs, target_date).first()
-    if not pricelist_detail:
+    if not pricelist_detail_qs:
         claimservice.rejection_reason = REJECTION_REASON_NOT_IN_PRICE_LIST
         errors += [{'code': REJECTION_REASON_NOT_IN_PRICE_LIST,
                     'message': _("claim.validation.claimservice_in_price_list_validity") % {
