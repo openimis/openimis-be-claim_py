@@ -5,6 +5,7 @@ from core.models import Officer, MutationLog
 from insuree.models import Insuree
 from location.models import HealthFacility, Location, LocationManager
 from .services import check_unique_claim_code
+from .utils import check_status_permission, get_user_permitted_statuses
 import django
 from core.schema import signal_mutation_module_validate, signal_mutation_module_after_mutating
 from django.db.models import OuterRef, Subquery, Avg, Q
@@ -124,6 +125,16 @@ class Query(graphene.ObjectType):
             raise PermissionDenied(_("unauthorized"))
         query = Claim.objects
         filters = []
+
+        requested_status = kwargs.get('status')
+        if requested_status is not None:
+            check_status_permission(info.context.user, requested_status)
+            filters.append(Q(status=requested_status))
+        else:
+            permitted_statuses = get_user_permitted_statuses(info.context.user)
+            if not permitted_statuses:
+                return Claim.objects.none()
+            filters.append(Q(status__in=permitted_statuses))
 
         show_restored = kwargs.get("show_restored", None)
         if show_restored:

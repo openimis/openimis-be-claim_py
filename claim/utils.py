@@ -1,7 +1,7 @@
 import math
 from claim.models import Claim, ClaimItem, ClaimService, ClaimDetail, ClaimServiceItem, ClaimServiceService
 from medical.models import Item, Service
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ValidationError, PermissionDenied
 from django.utils.translation import gettext as _
 from .apps import ClaimConfig
 from core import filter_validity
@@ -280,3 +280,43 @@ def get_queryset_valid_at_date(queryset, date):
     if filtered_qs.exists():
         return filtered_qs
     return queryset.filter(validity_from__lte=date, validity_to__isnull=True)
+
+def get_status_permission_mapping():
+
+    return {
+        Claim.STATUS_REJECTED: ClaimConfig.gql_query_claims_rejected_perms,
+        Claim.STATUS_ENTERED: ClaimConfig.gql_query_claims_entered_perms,
+        Claim.STATUS_CHECKED: ClaimConfig.gql_query_claims_checked_perms,
+        Claim.STATUS_PROCESSED: ClaimConfig.gql_query_claims_processed_perms,
+        Claim.STATUS_VALUATED: ClaimConfig.gql_query_claims_valuated_perms,
+        Claim.STATUS_RETURNED_FROM_FACILITY: ClaimConfig.gql_query_claims_returned_facility_perms,
+        Claim.STATUS_RETURNED_FROM_BRANCH: ClaimConfig.gql_query_claims_returned_branch_perms,
+        Claim.STATUS_SUBMITTED_TO_HEAD: ClaimConfig.gql_query_claims_submitted_head_perms,
+        Claim.STATUS_RESUBMITTED_TO_HEAD: ClaimConfig.gql_query_claims_resubmitted_head_perms,
+        Claim.STATUS_RESUBMITTED_TO_BRANCH: ClaimConfig.gql_query_claims_resubmitted_branch_perms,
+        Claim.STATUS_FLAGGED: ClaimConfig.gql_query_claims_flagged_perms,
+    }
+
+def check_status_permission(user, status):
+    status_permission_map = get_status_permission_mapping()
+    
+    required_perms = status_permission_map.get(status)
+    if required_perms and not user.has_perms(required_perms):
+        raise PermissionDenied(
+            _("unauthorized")
+        )
+
+
+def get_user_permitted_statuses(user):
+    if not user.has_perms(ClaimConfig.gql_query_claims_perms):
+        return []
+    
+    status_permission_map = get_status_permission_mapping()
+    permitted_statuses = []
+    
+    for status, required_perms in status_permission_map.items():
+        if user.has_perms(required_perms):
+            permitted_statuses.append(status)
+    
+    return permitted_statuses
+    

@@ -7,6 +7,17 @@ DEFAULT_CFG = {
     "gql_query_claims_perms": ["111001"],
     "gql_query_claim_officers_perms": [],
     "gql_query_claim_diagnosis_variance_only_on_existing": True,
+    "gql_query_claims_rejected_perms": ["111060"],
+    "gql_query_claims_entered_perms": ["111061"],
+    "gql_query_claims_checked_perms": ["111062"],     
+    "gql_query_claims_processed_perms": ["111063"],
+    "gql_query_claims_valuated_perms": ["111064"],
+    "gql_query_claims_returned_facility_perms": ["111065"],  
+    "gql_query_claims_returned_branch_perms": ["111066"],    
+    "gql_query_claims_submitted_head_perms": ["111067"],     
+    "gql_query_claims_resubmitted_head_perms": ["111068"],   
+    "gql_query_claims_resubmitted_branch_perms": ["111069"], 
+    "gql_query_claims_flagged_perms": ["111070"],
     "gql_mutation_create_claims_perms": ["111002"],
     "gql_mutation_update_claims_perms": ["111010"],
     "gql_mutation_return_claims_perms": ["111013"],
@@ -51,6 +62,17 @@ class ClaimConfig(AppConfig):
     
     gql_query_claim_officers_perms = []
     gql_query_claim_diagnosis_variance_only_on_existing = None
+    gql_query_claims_rejected_perms = []
+    gql_query_claims_entered_perms = []
+    gql_query_claims_checked_perms = []
+    gql_query_claims_processed_perms = []
+    gql_query_claims_valuated_perms = []
+    gql_query_claims_returned_facility_perms = []
+    gql_query_claims_returned_branch_perms = []
+    gql_query_claims_submitted_head_perms = []
+    gql_query_claims_resubmitted_head_perms = []
+    gql_query_claims_resubmitted_branch_perms = []
+    gql_query_claims_flagged_perms = []
     gql_mutation_create_claims_perms = []
     gql_mutation_update_claims_perms = []
     gql_mutation_return_claims_perms = []
