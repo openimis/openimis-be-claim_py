@@ -271,7 +271,7 @@ class ClaimInputType(OpenIMISMutation.Input):
     items = graphene.List(ClaimItemInputType, required=False)
     services = graphene.List(ClaimServiceInputType, required=False)
 
-class ReturnClaimInputType(OpenIMISMutation.Input):
+class ReturnOrResubmitClaimInputType(OpenIMISMutation.Input):
     uuid = graphene.String()
     predefined_reason = graphene.String()
     reason = graphene.String()
@@ -418,7 +418,7 @@ class ReturnClaimMutation(OpenIMISMutation):
     _mutation_module = "claim"
     _mutation_class = "UpdateClaimMutation"
 
-    class Input(ReturnClaimInputType):
+    class Input(ReturnOrResubmitClaimInputType):
         pass
 
     @classmethod
@@ -429,6 +429,31 @@ class ReturnClaimMutation(OpenIMISMutation):
                 raise ValidationError(
                     _("mutation.authentication_required"))
             if not user.has_perms(ClaimConfig.gql_mutation_return_claims_perms):
+                raise PermissionDenied(_("unauthorized"))
+            data['audit_user_id'] = user.id_for_audit
+            return_claim(data, user)
+            return None
+        except Exception as exc:
+            return [{
+                'message': _("claim.mutation.failed_to_update_claim") % {'code': data['code']},
+                'detail': str(exc)}]
+class ResubmitClaimMutation(OpenIMISMutation):
+    """
+    Resubmit a claim to facility head
+    """
+    _mutation_module = "claim"
+    _mutation_class = "UpdateClaimMutation"
+
+    class Input(ReturnOrResubmitClaimInputType):
+        pass
+
+    @classmethod
+    def async_mutate(cls, user, **data):
+        try:
+            if type(user) is AnonymousUser or not user.id:
+                raise ValidationError(
+                    _("mutation.authentication_required"))
+            if not user.has_perms(ClaimConfig.gql_mutation_resubmit_claims_to_head_perms):
                 raise PermissionDenied(_("unauthorized"))
             data['audit_user_id'] = user.id_for_audit
             return_claim(data, user)
