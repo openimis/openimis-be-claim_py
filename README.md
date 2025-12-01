@@ -23,6 +23,13 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 ## Services
 * *DEPRECATED* ClaimSubmitService.submit, mapped to uspUpdateClaimFromPhone Stored Proc (used by api_fhir reference implementation: needs replacement, with signals)
 * ClaimReportService, loading the necessary data for the Claim printing
+## New Defined Statuses for claim
+* STATUS_RETURNED_FROM_FACILITY = 17
+* STATUS_RETURNED_FROM_BRANCH = 18
+* STATUS_SUBMITTED_TO_HEAD = 19
+* STATUS_RESUBMITTED_TO_HEAD = 20
+* STATUS_RESUBMITTED_TO_BRANCH = 21
+* STATUS_FLAGGED = 22
 
 ## Reports (template can be overloaded via report.ReportDefinition)
 * claim_claims (Claim printing)
@@ -78,6 +85,12 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * gql_mutation_process_claims_perms: required rights to call process_claims GraphQL Mutation (default: `["111011"]`)
 * gql_mutation_delete_claims_perms: required rights to call delete_claims GraphQL Mutation (default: `["111004"]`)
 * claim_print_perms: required rights to call print endpoint (default: `["111006"]`)
+* gql_mutation_submit_claims_to_head_perms: required rights to call submit_claims_to_head GraphQL Mutation (default: `["111014"]`)
+* gql_mutation_resubmit_claims_to_head_perms: required rights to call resubmit_claims_to_head GraphQL Mutation (default: `["111015"]`)
+* gql_mutation_resubmit_claims_to_branch_perms: required rights to call resubmit_claims_to_branch GraphQL Mutation (default: `["111016"]`)
+* gql_mutation_flag_claims_perms: required rights to call flag_claims GraphQL Mutation (default: `["111017"]`)
+* gql_mutation_approve_claims_perms: required rights to call approve_claims GraphQL Mutation (default: `["111018"]`)
+* gql_mutation_reject_claims_perms: required rights to call reject_claims GraphQL Mutation (default: `["111019"]`)
 * claim_attachments_root_path: using os standard file system, root path for the claim attachments (default: None ... documents B64 in database)
 
   WARNINGS:
