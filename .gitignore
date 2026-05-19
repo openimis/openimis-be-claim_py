@@ -9,3 +9,10 @@ dist
 **/*.mo
 locale/__init__.py
 .idea/**
+
+# Forge-managed local artifacts (never commit)
+.forge-commit-ready
+.forge/project-id
+.cursor/hooks.json
+.cursor/hooks/
+.cursor/rules/forge-workflow.mdc
