@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": ".cursor/hooks/forge-pre-commit.sh",
+        "matcher": "git commit",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/forge-ship-reminder.sh",
+        "timeout": 5
+      }
+    ]
+  }
+}

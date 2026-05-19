@@ -13,6 +13,7 @@ locale/__init__.py
 # Forge-managed local artifacts (never commit)
 .forge-commit-ready
 .forge/project-id
+.forge/last-ship-mcp.json
 .cursor/hooks.json
 .cursor/hooks/
 .cursor/rules/forge-workflow.mdc

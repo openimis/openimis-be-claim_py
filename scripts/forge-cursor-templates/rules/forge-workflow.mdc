@@ -1,0 +1,40 @@
+---
+description: Mandatory Forge WO ship workflow — push, PR, and Forge update together on every WO completion.
+alwaysApply: true
+---
+
+# Forge WO Ship Workflow (ClaimsAdjudication)
+
+**Project:** `5fc679ab-b55c-441c-848d-2b5435a7462d` (ClaimsAdjudication)  
+**Fork:** `alekhyaakkiraju-droid/ClaimsAdjudication`  
+**Branch pattern:** `wo/WO-XXX-short-description`
+
+## On every work order completion (MANDATORY)
+
+Do **not** stop after commit. In **one continuous flow**:
+
+1. **`prepare_commit`** (Forge MCP) — only after acceptance criteria are satisfied; use returned message.
+2. **`git commit`** with `[WO-XXX]` in the message (Forge pre-commit hook enforces checklist).
+3. **`./scripts/forge-wo-ship.sh WO-XXX <work_order_uuid>`** — pushes branch and creates/updates GitHub PR (`develop` base on fork).
+4. **Forge MCP (same turn, immediately after ship script):**
+   - `create_pull_request` — pass `work_order_id`, `branch_name`, `repo_url`, `repo_name`, `pr_url`, `pr_number`, `changes_summary`
+   - `update_work_order` — `status: in_review` plus all dev-activity fields from `.forge/last-ship-mcp.json` / git commands
+5. Confirm PR URL and Forge status `in_review` to the user.
+
+Never force-push. Never skip push, PR, or Forge update for a completed WO.
+
+## Branching
+
+- One commit per WO; branch name includes WO id: `wo/WO-XXX-kebab-title`
+- Base new branches on fork `develop` (not upstream `openimis/openimis-be-claim_py` unless explicitly requested)
+
+## Before first WO in a clone
+
+1. `set_project` with ClaimsAdjudication project id  
+2. `configure_repo` (`ide: cursor`) or `./scripts/install-forge-cursor.sh`  
+3. Ensure `.forge/project-id` contains the project UUID (from `set_project`)
+
+## Python module conventions
+
+- Match existing `claim/` patterns; run tests from parent `openimis-be_py` when applicable
+- Do not commit `.forge-commit-ready`, `.forge/last-ship-mcp.json`, or `.cursor/hooks*` (gitignored)

@@ -2,6 +2,12 @@
 This repository holds the files of the openIMIS Backend Claim reference module.
 It is dedicated to be deployed as a module of [openimis-be_py](https://github.com/openimis/openimis-be_py).
 
+## Forge work orders (ClaimsAdjudication)
+
+This fork participates in the **ClaimsAdjudication** Forge project. For every completed WO: push, open/update a PR, and set Forge status to `in_review` in the same flow.
+
+See **[docs/FORGE_WO_WORKFLOW.md](docs/FORGE_WO_WORKFLOW.md)** — one-command ship: `./scripts/forge-wo-ship.sh WO-XXX <work_order_uuid>`.
+
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 ## Code climate (develop branch)
