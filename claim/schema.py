@@ -1,7 +1,7 @@
 import graphene
 from enum import Enum
 import logging
-from core.models import Officer, MutationLog
+from core.models import MutationLog
 from insuree.models import Insuree
 from .services import check_unique_claim_code
 from core.schema import (
@@ -235,15 +235,9 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
             raise PermissionDenied(_("unauthorized"))
 
-        qs = Officer.objects
+        from core.services.userBusinessAccessServices import get_officers_for_user
 
-        if search is not None:
-            qs = qs.filter(
-                Q(code__icontains=search)
-                | Q(last_name__icontains=search)
-                | Q(other_names__icontains=search)
-            )
-        return qs
+        return get_officers_for_user(info.context.user, search=search, **kwargs)
 
     def resolve_fsp_from_claim(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):

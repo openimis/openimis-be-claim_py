@@ -15,6 +15,18 @@ from claim.models import Claim
 from claim.services import processing_claim
 
 import datetime
+from django.core.cache import caches
+from django.test import TestCase
+from core.utils import clear_current_user, clear_history_context
+from core.test_helpers import create_medical_officer_role
+from location.test_helpers import (
+    create_test_location,
+    assign_user_districts,
+    create_test_health_facility,
+)
+from claim.gql_queries import ClaimGQLType
+from claim.gql_mutations import SubmitClaimsMutation
+from core.gql.gql_mutations.mutation_by_filter import mutation_on_queryset_from_filter
 from policy.models import Policy
 from policy.test_helpers import create_test_policy2
 from product.test_helpers import create_test_product, create_test_product_service
@@ -23,6 +35,17 @@ from insuree.test_helpers import create_test_insuree
 from medical.test_helpers import create_test_service, create_test_diagnosis
 from medical_pricelist.test_helpers import add_service_to_hf_pricelist
 from claim.test_helpers import create_test_claim, create_test_claim_admin
+
+
+def _make_async_mutate_spy():
+    """Return a simple async_mutate replacement that records the data it receives."""
+    calls = []
+
+    def _spy(cls, user, **data):
+        calls.append({"cls": cls, "user": user, "data": dict(data)})
+        return "ok"
+
+    return _spy, calls
 
 
 class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
@@ -438,3 +461,206 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         self.assertEqual(edges[1]['node']['code'], self.claim.code)
         self.assertIsNotNone(edges[1]['node']['validityTo'])
         self.assertEqual(edges[1]['node']['status'], Claim.STATUS_CHECKED)
+
+
+class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):
+    """
+    Tests that the @mutation_on_queryset_from_filter decorator used on
+    SubmitClaimsMutation correctly honors Claim.get_queryset row security
+    (HF or district restrictions) when additional_filters (e.g. status=CHECKED)
+    is used instead of explicit uuids.
+    Only claims the submitting user has rights to (via HF for claim-admins or
+    district via UserDistrict) must end up in the resulting queryset.
+    """
+
+    def setUp(self):
+        clear_current_user()
+        clear_history_context()
+        caches["default"].clear()
+
+    def tearDown(self):
+        clear_current_user()
+        clear_history_context()
+        caches["default"].clear()
+
+    def test_submit_claims_filter_on_checked_state_only_returns_user_accessible_claims_district(self):
+        """
+        District-restricted user (via UserDistrict) + filter status=CHECKED:
+        - Create claims in allowed district and foreign district, all with CHECKED status.
+        - additional_filters selects status CHECKED (would match all without row sec).
+        - Resulting queryset from decorator must contain only the claims from the user's district.
+        """
+        # Locations: two districts (codes <=8 chars per model). D must have parent for UserDistrict queries in get_user_districts.
+        region_allowed = create_test_location(
+            "R", custom_props={"code": "RA1", "name": "Allowed Region"}
+        )
+        district_allowed = create_test_location(
+            "D", custom_props={"code": "DA1", "name": "Allowed District for submit filter", "parent": region_allowed}
+        )
+        region_forbidden = create_test_location(
+            "R", custom_props={"code": "RF2", "name": "Forbidden Region"}
+        )
+        district_forbidden = create_test_location(
+            "D", custom_props={"code": "DF2", "name": "Forbidden District for submit filter", "parent": region_forbidden}
+        )
+
+        hf_allowed = create_test_health_facility(
+            code="HA1", location_id=district_allowed.id
+        )
+        hf_forbidden = create_test_health_facility(
+            code="HF2", location_id=district_forbidden.id
+        )
+
+        # Limited non-super user with submit perms, restricted to one district
+        med_officer_role = create_medical_officer_role()
+        limited_user = create_test_interactive_user(
+            username="submitter_district_only",
+            roles=[med_officer_role.id],
+            custom_props={"is_superuser": False},
+        )
+        assign_user_districts(limited_user, [district_allowed.code])
+
+        # Create claims matching the filter (CHECKED) in both locations
+        claim_allowed1 = create_test_claim(
+            custom_props={
+                "health_facility": hf_allowed,
+                "status": Claim.STATUS_CHECKED,
+                "code": "SUBMIT-ALLOW-1",
+            }
+        )
+        claim_allowed2 = create_test_claim(
+            custom_props={
+                "health_facility": hf_allowed,
+                "status": Claim.STATUS_CHECKED,
+                "code": "SUBMIT-ALLOW-2",
+            }
+        )
+        # A non-matching status in allowed location (should be excluded by the status filter too)
+        claim_allowed_entered = create_test_claim(
+            custom_props={
+                "health_facility": hf_allowed,
+                "status": Claim.STATUS_ENTERED,
+                "code": "SUBMIT-ALLOW-ENTERED",
+            }
+        )
+
+        claim_forbidden1 = create_test_claim(
+            custom_props={
+                "health_facility": hf_forbidden,
+                "status": Claim.STATUS_CHECKED,
+                "code": "SUBMIT-FORBID-1",
+            }
+        )
+        claim_forbidden2 = create_test_claim(
+            custom_props={
+                "health_facility": hf_forbidden,
+                "status": Claim.STATUS_CHECKED,
+                "code": "SUBMIT-FORBID-2",
+            }
+        )
+
+        spy, calls = _make_async_mutate_spy()
+
+        # Re-apply the exact same decorator config used by SubmitClaimsMutation
+        # (including its explicit filter handlers for services/items)
+        handlers = getattr(
+            SubmitClaimsMutation, "_SubmitClaimsMutation__filter_handlers", {}
+        )
+        decorated = mutation_on_queryset_from_filter(
+            Claim,
+            ClaimGQLType,
+            "additional_filters",
+            handlers,
+        )(spy)
+
+        # Use additional_filters for the status=CHECKED (the filter requested in the scenario)
+        # Note: key "status" maps to the exact filter.
+        filters = {"status": Claim.STATUS_CHECKED}
+        data = {"additional_filters": json.dumps(filters)}
+
+        # Call without uuids and without pre-supplied queryset -> triggers get_queryset + filter
+        decorated(SubmitClaimsMutation, limited_user, **data)
+
+        self.assertEqual(len(calls), 1)
+        received_data = calls[0]["data"]
+        self.assertIn("queryset", received_data)
+        final_qs = received_data["queryset"]
+
+        final_uuids = set(final_qs.values_list("uuid", flat=True))
+
+        # Only claims from the allowed location + matching filter should be present
+        self.assertIn(claim_allowed1.uuid, final_uuids)
+        self.assertIn(claim_allowed2.uuid, final_uuids)
+        self.assertNotIn(claim_allowed_entered.uuid, final_uuids)  # filtered out by status
+        self.assertNotIn(claim_forbidden1.uuid, final_uuids)
+        self.assertNotIn(claim_forbidden2.uuid, final_uuids)
+
+        # All returned must be CHECKED (the filter) and from allowed hf
+        for c in final_qs:
+            self.assertEqual(c.status, Claim.STATUS_CHECKED)
+            self.assertEqual(c.health_facility_id, hf_allowed.id)
+
+    def test_submit_claims_filter_on_checked_state_only_returns_user_accessible_claims_hf(self):
+        """
+        HF-restricted user (health_facility_id on i_user, as for claimAdmins):
+        Same logic: filter status=CHECKED must only yield claims under the user's HF.
+        """
+        region = create_test_location(
+            "R", custom_props={"code": "RH1", "name": "HF only region"}
+        )
+        district = create_test_location(
+            "D", custom_props={"code": "DH1", "name": "HF only district", "parent": region}
+        )
+        hf_allowed = create_test_health_facility(
+            code="HFA1", location_id=district.id
+        )
+        hf_forbidden = create_test_health_facility(
+            code="HFF2", location_id=district.id  # same district, different hf -> still restricted by hf_id
+        )
+
+        med_officer_role = create_medical_officer_role()
+        limited_user = create_test_interactive_user(
+            username="submitter_hf_only",
+            roles=[med_officer_role.id],
+            custom_props={"is_superuser": False},
+        )
+        # Simulate claim admin style restriction
+        limited_user.i_user.health_facility_id = hf_allowed.id
+        limited_user.i_user.save()
+
+        claim_ok = create_test_claim(
+            custom_props={
+                "health_facility": hf_allowed,
+                "status": Claim.STATUS_CHECKED,
+                "code": "HFONLY-OK",
+            }
+        )
+        claim_bad = create_test_claim(
+            custom_props={
+                "health_facility": hf_forbidden,
+                "status": Claim.STATUS_CHECKED,
+                "code": "HFONLY-BAD",
+            }
+        )
+
+        spy, calls = _make_async_mutate_spy()
+
+        decorated = mutation_on_queryset_from_filter(
+            Claim,
+            ClaimGQLType,
+            "additional_filters",
+            getattr(SubmitClaimsMutation, "_SubmitClaimsMutation__filter_handlers", {}),
+        )(spy)
+
+        data = {"additional_filters": json.dumps({"status": Claim.STATUS_CHECKED})}
+
+        decorated(SubmitClaimsMutation, limited_user, **data)
+
+        final_qs = calls[0]["data"]["queryset"]
+        final_uuids = set(final_qs.values_list("uuid", flat=True))
+
+        self.assertIn(claim_ok.uuid, final_uuids)
+        self.assertNotIn(claim_bad.uuid, final_uuids)
+
+        for c in final_qs:
+            self.assertEqual(c.health_facility_id, hf_allowed.id)
