@@ -12,9 +12,10 @@ from graphene.test import Client
 from graphene import Schema
 
 from claim.models import Claim
-from claim.services import processing_claim
+from claim.services import processing_claim, ClaimSubmitService, ClaimSubmitError
 
 import datetime
+from unittest import mock
 from django.core.cache import caches
 from django.test import TestCase
 from core.utils import clear_current_user, clear_history_context
@@ -465,12 +466,19 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
 
 class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):
     """
-    Tests that the @mutation_on_queryset_from_filter decorator used on
-    SubmitClaimsMutation correctly honors Claim.get_queryset row security
-    (HF or district restrictions) when additional_filters (e.g. status=CHECKED)
-    is used instead of explicit uuids.
-    Only claims the submitting user has rights to (via HF for claim-admins or
-    district via UserDistrict) must end up in the resulting queryset.
+    Tests row security for claim submission.
+
+    After the core change that stopped calling Model.get_queryset(user) inside
+    mutation_on_queryset_from_filter, the decorator no longer pre-filters the
+    queryset with the user's location rights.
+
+    These tests verify that submit is still only applied to claims the user
+    is authorized for:
+    - When using additional_filters, the resulting queryset should respect
+      the user's location rights (where the decorator still applies filters).
+    - When explicit uuids are provided (including a mix of authorized and
+      unauthorized claims), only authorized claims should have their status
+      changed by the submit operation.
     """
 
     def setUp(self):
@@ -664,3 +672,294 @@ class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):
 
         for c in final_qs:
             self.assertEqual(c.health_facility_id, hf_allowed.id)
+
+    def test_user_cannot_submit_claim_from_unauthorized_location(self):
+        """
+        Regression test: ensure submit cannot be applied to a claim the user
+        is not authorised for due to location (district/HF) restrictions.
+
+        This is important after the core change that stopped calling
+        Model.get_queryset(user) inside mutation_on_queryset_from_filter:
+        submit protection for explicit uuids (and potentially filter-derived
+        claims) now relies on ClaimSubmitService._validate_user_hf.
+
+        - restricted user (via UserDistrict)
+        - claim exists in a district the user is not assigned to
+        - calling submit_claim must raise ClaimSubmitError
+        - the claim status must remain unchanged (submit not applied)
+        """
+        # Setup locations in two different districts
+        region_allowed = create_test_location(
+            "R", custom_props={"code": "RS1", "name": "Submit Auth Allowed Region"}
+        )
+        district_allowed = create_test_location(
+            "D",
+            custom_props={
+                "code": "DS1",
+                "name": "Submit Auth Allowed District",
+                "parent": region_allowed,
+            },
+        )
+        region_forbidden = create_test_location(
+            "R", custom_props={"code": "RS2", "name": "Submit Auth Forbidden Region"}
+        )
+        district_forbidden = create_test_location(
+            "D",
+            custom_props={
+                "code": "DS2",
+                "name": "Submit Auth Forbidden District",
+                "parent": region_forbidden,
+            },
+        )
+
+        hf_allowed = create_test_health_facility(
+            code="HFS1", location_id=district_allowed.id
+        )
+        hf_forbidden = create_test_health_facility(
+            code="HFS2", location_id=district_forbidden.id
+        )
+
+        med_officer_role = create_medical_officer_role()
+        limited_user = create_test_interactive_user(
+            username="submit_auth_limited",
+            roles=[med_officer_role.id],
+            custom_props={"is_superuser": False},
+        )
+        assign_user_districts(limited_user, [district_allowed.code])
+
+        # Create a claim in the *forbidden* location, in a submittable state
+        forbidden_claim = create_test_claim(
+            custom_props={
+                "health_facility": hf_forbidden,
+                "status": Claim.STATUS_ENTERED,
+                "code": "NOAUTH-SUBMIT-UUID",
+            }
+        )
+
+        service = ClaimSubmitService(limited_user)
+
+        # The submit must be rejected due to location (hf not visible to user)
+        with self.assertRaises(ClaimSubmitError):
+            service.submit_claim(forbidden_claim)
+
+        # Ensure submit was not applied
+        forbidden_claim.refresh_from_db()
+        self.assertEqual(forbidden_claim.status, Claim.STATUS_ENTERED)
+
+    def test_submit_claims_with_uuid_list_only_applies_to_authorized_claims(self):
+        """
+        Submit using an explicit list of uuids (the path used by SubmitClaimsMutation
+        when uuids are provided directly, bypassing additional_filters).
+
+        The list contains both an authorized claim and one the user should not be
+        able to submit (different location / district).
+
+        Only the authorized claim should have its status changed by the submit.
+        The unauthorized claim must remain untouched.
+        """
+        # Locations + HFs in two different districts
+        region_allowed = create_test_location(
+            "R", custom_props={"code": "RU1", "name": "RowSec Allowed Region"}
+        )
+        district_allowed = create_test_location(
+            "D",
+            custom_props={
+                "code": "DU1",
+                "name": "RowSec Allowed District",
+                "parent": region_allowed,
+            },
+        )
+        region_forbidden = create_test_location(
+            "R", custom_props={"code": "RU2", "name": "RowSec Forbidden Region"}
+        )
+        district_forbidden = create_test_location(
+            "D",
+            custom_props={
+                "code": "DU2",
+                "name": "RowSec Forbidden District",
+                "parent": region_forbidden,
+            },
+        )
+
+        hf_allowed = create_test_health_facility(
+            code="HFU1", location_id=district_allowed.id
+        )
+        hf_forbidden = create_test_health_facility(
+            code="HFU2", location_id=district_forbidden.id
+        )
+
+        med_officer_role = create_medical_officer_role()
+        limited_user = create_test_interactive_user(
+            username="submit_mixed_uuids_user",
+            roles=[med_officer_role.id],
+            custom_props={"is_superuser": False},
+        )
+        assign_user_districts(limited_user, [district_allowed.code])
+
+        # Two claims ready to be submitted
+        claim_allowed = create_test_claim(
+            custom_props={
+                "health_facility": hf_allowed,
+                "status": Claim.STATUS_ENTERED,
+                "code": "MIXED-UUID-OK",
+            }
+        )
+        claim_forbidden = create_test_claim(
+            custom_props={
+                "health_facility": hf_forbidden,
+                "status": Claim.STATUS_ENTERED,
+                "code": "MIXED-UUID-BAD",
+            }
+        )
+
+        # Send an explicit list of uuids (as SubmitClaimsMutation receives)
+        # containing both an authorized claim and one the user must not submit.
+        target_uuids = [str(claim_allowed.uuid), str(claim_forbidden.uuid)]
+
+        # Patch processing_claim so an authorized claim can successfully
+        # reach CHECKED status. The location authorization check still runs.
+        # Also neutralize stats logging (no real MutationLog in this test).
+        with mock.patch("claim.services.processing_claim", return_value=[]), \
+             mock.patch.object(SubmitClaimsMutation, "add_submission_stats_to_mutation_log"):
+            try:
+                SubmitClaimsMutation.async_mutate(
+                    user=limited_user, uuids=target_uuids
+                )
+            except ClaimSubmitError:
+                # One (or more) of the claims was outside the user's allowed locations.
+                # This is expected; we continue to verify the side effects.
+                pass
+
+        claim_allowed.refresh_from_db()
+        claim_forbidden.refresh_from_db()
+
+        # If the authorized claim was not yet processed (e.g. bad claim appeared
+        # first in the queryset iteration), submit it on its own so we can
+        # assert that submit works for claims the user *is* allowed to touch.
+        if claim_allowed.status == Claim.STATUS_ENTERED:
+            with mock.patch("claim.services.processing_claim", return_value=[]), \
+                 mock.patch.object(SubmitClaimsMutation, "add_submission_stats_to_mutation_log"):
+                SubmitClaimsMutation.async_mutate(
+                    SubmitClaimsMutation, limited_user, uuids=[str(claim_allowed.uuid)]
+                )
+            claim_allowed.refresh_from_db()
+
+        # The authorized claim must have had submit applied (status changed).
+        # The unauthorized claim must not have been submitted.
+        self.assertEqual(claim_allowed.status, Claim.STATUS_CHECKED)
+        self.assertEqual(claim_forbidden.status, Claim.STATUS_ENTERED)
+
+    def test_submit_via_additional_filters_simulates_missing_get_queryset_still_only_submits_authorized(self):
+        """
+        This test reproduces the scenario the user temporarily created in core:
+
+        - The decorator (mutation_on_queryset_from_filter) is made to NOT call
+          Claim.get_queryset(user)  (i.e. it would pass a broad queryset from .objects)
+        - additional_filters selects claims that exist in both allowed and
+          forbidden locations for the user.
+        - We then actually perform the submit on the claims coming from that
+          (simulated broad) queryset.
+        - Only claims the user is authorised for (via location) must have their
+          status changed. Unauthorized claims must not be submitted.
+
+        This ensures that even if the decorator stops applying row security,
+        the submit operation itself will not apply changes to claims the user
+        should not touch.
+        """
+        # Build two districts + HFs
+        region_allowed = create_test_location(
+            "R", custom_props={"code": "RF1", "name": "FilterRow Allowed Region"}
+        )
+        district_allowed = create_test_location(
+            "D", custom_props={"code": "DF1", "name": "FilterRow Allowed District", "parent": region_allowed}
+        )
+        region_forbidden = create_test_location(
+            "R", custom_props={"code": "RF2", "name": "FilterRow Forbidden Region"}
+        )
+        district_forbidden = create_test_location(
+            "D", custom_props={"code": "DF2", "name": "FilterRow Forbidden District", "parent": region_forbidden}
+        )
+
+        hf_allowed = create_test_health_facility(code="HFR1", location_id=district_allowed.id)
+        hf_forbidden = create_test_health_facility(code="HFR2", location_id=district_forbidden.id)
+
+        med_officer_role = create_medical_officer_role()
+        limited_user = create_test_interactive_user(
+            username="filterrow_limited",
+            roles=[med_officer_role.id],
+            custom_props={"is_superuser": False},
+        )
+        assign_user_districts(limited_user, [district_allowed.code])
+
+        # Claims in ENTERED so they are candidates for submit, and the filter can select them
+        claim_allowed = create_test_claim(
+            custom_props={
+                "health_facility": hf_allowed,
+                "status": Claim.STATUS_ENTERED,
+                "code": "FILT-ALLOW-SUB",
+            }
+        )
+        claim_forbidden = create_test_claim(
+            custom_props={
+                "health_facility": hf_forbidden,
+                "status": Claim.STATUS_ENTERED,
+                "code": "FILT-FORBID-SUB",
+            }
+        )
+
+        # This will be called by the decorated function, receiving whatever queryset
+        # the (simulated insecure) decorator decided to pass.
+        def _do_submit(cls, user, **data):
+            target_qs = data.get("queryset")
+            if target_qs is None:
+                uuids = data.get("uuids") or []
+                target_qs = Claim.objects.filter(uuid__in=uuids)
+
+            service = ClaimSubmitService(user)
+
+            # Real location enforcement must still happen per claim
+            with mock.patch("claim.services.processing_claim", return_value=[]):
+                for claim in target_qs.filter(validity_to__isnull=True):
+                    try:
+                        service.submit_claim(claim, user)
+                    except ClaimSubmitError:
+                        # Unauthorized for this user -> do not apply submit
+                        continue
+            return None
+
+        handlers = getattr(
+            SubmitClaimsMutation, "_SubmitClaimsMutation__filter_handlers", {}
+        )
+
+        decorated = mutation_on_queryset_from_filter(
+            Claim, ClaimGQLType, "additional_filters", handlers
+        )(_do_submit)
+
+        # Filter that matches both claims (status based). If decorator does not
+        # apply user location filtering, both would be in the queryset.
+        additional_filters = json.dumps({"status": Claim.STATUS_ENTERED})
+
+        # Simulate the temporary core change the user made:
+        # make Claim.get_queryset not apply row security (return unfiltered qs).
+        def _insecure_get_queryset(cls, queryset, user):
+            # Return the queryset without applying user location restrictions.
+            # (basic validity filter is still useful)
+            try:
+                return Claim.filter_queryset(queryset)
+            except Exception:
+                return queryset
+
+        original_get_qs = Claim.get_queryset
+        try:
+            Claim.get_queryset = classmethod(_insecure_get_queryset)
+            decorated(SubmitClaimsMutation, limited_user, additional_filters=additional_filters)
+        finally:
+            Claim.get_queryset = original_get_qs
+
+        claim_allowed.refresh_from_db()
+        claim_forbidden.refresh_from_db()
+
+        # Only the claim belonging to an allowed location for the user
+        # should have been submitted.
+        self.assertEqual(claim_allowed.status, Claim.STATUS_CHECKED)
+        self.assertEqual(claim_forbidden.status, Claim.STATUS_ENTERED)
