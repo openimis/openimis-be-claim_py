@@ -234,10 +234,15 @@ class BulkInsureeGenerator:
             span_days = (latest - earliest).days
             for _ in range(num_claims_per_insuree):
                 claim_date = earliest + timedelta(days=random.randint(0, span_days)) if span_days > 0 else earliest
+                # IPD (in-patient) claims require a stay, so date_to is a few days after date_from.
+                # OPD (out-patient) claims are same-day and leave date_to unset.
+                care_type = random.choice(["IPD", "OPD"])
+                date_to = claim_date + timedelta(days=random.randint(2, 5)) if care_type == "IPD" else None
                 # Note: Setting status to ENTERED - claims admin will need to review, Also TODO: we need to find data diversity of claims
                 claim = Claim(
                     uuid=str(uuid.uuid4()), insuree=insuree, code=f"BULK-{uuid.uuid4()}",
-                    date_from=claim_date, date_claimed=claim_date, status=Claim.STATUS_ENTERED,
+                    date_from=claim_date, date_to=date_to, care_type=care_type,
+                    date_claimed=claim_date, status=Claim.STATUS_ENTERED,
                     health_facility=insuree.health_facility or random.choice(self.health_facilities),
                     icd=random.choice(self.diagnoses), audit_user_id=1, claimed=0
                 )
