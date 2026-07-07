@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 from django.test import TestCase
 
-from claim.management.commands.seed_synthetic_health_data import BulkInsureeGenerator
+from claim.management.commands.seed_synthetic_health_data import CARE_TYPE_WEIGHTS, BulkInsureeGenerator
 from claim.models import Claim
 from insuree.test_helpers import create_test_insuree
 from location.test_helpers import create_test_health_facility, create_test_village
@@ -118,3 +118,34 @@ class GenerateClaimsDateCoherenceTest(TestCase):
 
         # With 40 draws, both care types should show up (sanity check on randomization).
         self.assertEqual(care_types_seen, {"IPD", "OPD"})
+
+    def test_care_type_distribution_matches_configured_weights(self):
+        """IPD share should track CARE_TYPE_WEIGHTS (~15-20%), not a 50/50 split."""
+        policy_by_family = {self.insuree.family_id: self.policy}
+        sample_size = 2000
+
+        self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
+
+        claims = Claim.objects.filter(insuree=self.insuree)
+        ipd_count = claims.filter(care_type="IPD").count()
+        ipd_ratio = ipd_count / sample_size
+
+        expected_ratio = CARE_TYPE_WEIGHTS["IPD"] / sum(CARE_TYPE_WEIGHTS.values())
+        # Allow a statistical tolerance around the expected ratio for a sample of 2000.
+        self.assertAlmostEqual(ipd_ratio, expected_ratio, delta=0.05)
+
+    def test_visit_type_is_randomized_among_valid_values(self):
+        policy_by_family = {self.insuree.family_id: self.policy}
+
+        # Generate enough claims that all three visit types are very likely to appear.
+        self.generator._generate_claims([self.insuree], 60, policy_by_family)
+
+        claims = Claim.objects.filter(insuree=self.insuree)
+        self.assertEqual(claims.count(), 60)
+
+        visit_types_seen = {claim.visit_type for claim in claims}
+        for visit_type in visit_types_seen:
+            self.assertIn(visit_type, ["O", "E", "R"])
+
+        # With 60 draws, all three visit types should show up (sanity check on randomization).
+        self.assertEqual(visit_types_seen, {"O", "E", "R"})

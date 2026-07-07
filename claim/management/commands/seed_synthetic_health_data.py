@@ -45,6 +45,19 @@ from policy.models import Policy
 from product.models import Product
 
 
+# ---------------------------------------------------------------------------
+# Synthetic data distribution parameters
+#
+# Tune these to make generated data match real-world proportions instead of
+# a naive uniform random.choice(). Weights are relative, not percentages -
+# random.choices() normalizes them, but the values below are chosen so the
+# CARE_TYPE_WEIGHTS ratio already reads as 15-20% IPD / 80-85% OPD.
+# ---------------------------------------------------------------------------
+CARE_TYPE_WEIGHTS = {
+    "IPD": 17,  # in-patient claims: ~15-20% of all claims
+    "OPD": 83,  # out-patient claims: the remainder
+}
+
 class PostgreSQLOptimizer: #for quick generation , this is only for developement and testing do not use in production!!
     """PostgreSQL-specific optimizations for bulk operations"""
     @staticmethod
@@ -236,12 +249,16 @@ class BulkInsureeGenerator:
                 claim_date = earliest + timedelta(days=random.randint(0, span_days)) if span_days > 0 else earliest
                 # IPD (in-patient) claims require a stay, so date_to is a few days after date_from.
                 # OPD (out-patient) claims are same-day and leave date_to unset.
-                care_type = random.choice(["IPD", "OPD"])
+                care_type = random.choices(
+                    list(CARE_TYPE_WEIGHTS.keys()), weights=list(CARE_TYPE_WEIGHTS.values())
+                )[0]
                 date_to = claim_date + timedelta(days=random.randint(2, 5)) if care_type == "IPD" else None
+                # Visit type: "O" ordinary, "E" emergency, "R" referral (see validations.visit_type_field).
+                visit_type = random.choice(["O", "E", "R"])
                 # Note: Setting status to ENTERED - claims admin will need to review, Also TODO: we need to find data diversity of claims
                 claim = Claim(
                     uuid=str(uuid.uuid4()), insuree=insuree, code=f"BULK-{uuid.uuid4()}",
-                    date_from=claim_date, date_to=date_to, care_type=care_type,
+                    date_from=claim_date, date_to=date_to, care_type=care_type, visit_type=visit_type,
                     date_claimed=claim_date, status=Claim.STATUS_ENTERED,
                     health_facility=insuree.health_facility or random.choice(self.health_facilities),
                     icd=random.choice(self.diagnoses), audit_user_id=1, claimed=0
