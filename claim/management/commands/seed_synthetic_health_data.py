@@ -210,12 +210,30 @@ class BulkInsureeGenerator:
         self._bulk_create_with_progress(InsureePolicy, insuree_policies, "InsureePolicy relationships")
         return len(insuree_policies)
 
-    def _generate_claims(self, all_insurees, num_claims_per_insuree):
+    def _get_claim_date_range(self, insuree, policy_by_family):
+        """Return (earliest, latest) valid dates for a claim on this insuree.
+
+        Claims must fall within the insuree's policy coverage period so that
+        we never claim before a policy exists. If no policy is found (e.g. a
+        fraudulent claim attempt with no active policy), fall back to a
+        2-year window ending today - such claims are expected to be rejected
+        downstream.
+        """
+        policy = policy_by_family.get(insuree.family_id)
+        if policy is None:
+            return date.today() - timedelta(days=730), date.today()
+        earliest = policy.effective_date
+        latest = min(policy.expiry_date, date.today())
+        return earliest, latest
+
+    def _generate_claims(self, all_insurees, num_claims_per_insuree, policy_by_family):
         self.write(f"\n=== Generating {num_claims_per_insuree} claims for each of {len(all_insurees):,} insurees ===")
         claims_to_create = []
         for insuree in all_insurees:
+            earliest, latest = self._get_claim_date_range(insuree, policy_by_family)
+            span_days = (latest - earliest).days
             for _ in range(num_claims_per_insuree):
-                claim_date = date.today() - timedelta(days=random.randint(1, 80))
+                claim_date = earliest + timedelta(days=random.randint(0, span_days)) if span_days > 0 else earliest
                 # Note: Setting status to ENTERED - claims admin will need to review, Also TODO: we need to find data diversity of claims
                 claim = Claim(
                     uuid=str(uuid.uuid4()), insuree=insuree, code=f"BULK-{uuid.uuid4()}",
@@ -278,7 +296,8 @@ class BulkInsureeGenerator:
                        'policies': len(policies), 'insuree_policies': insuree_policies}
 
             if num_claims > 0:
-                claims, items, services = self._generate_claims(all_insurees, num_claims)
+                policy_by_family = {p.family_id: p for p in policies}
+                claims, items, services = self._generate_claims(all_insurees, num_claims, policy_by_family)
                 results.update({'claims': claims, 'claim_items': items, 'claim_services': services})
 
         finally:
