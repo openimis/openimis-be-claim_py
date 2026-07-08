@@ -187,7 +187,10 @@ class GenerateClaimsStatusDistributionTest(TestCase):
 
         auto_rejected = claims.filter(status=Claim.STATUS_REJECTED, review_status=Claim.REVIEW_IDLE)
         mo_rejected = claims.filter(status=Claim.STATUS_REJECTED, review_status=Claim.REVIEW_DELIVERED)
-        normal = claims.filter(status=Claim.STATUS_ENTERED)
+        # Non-rejected claims are spread across Entered/Submit/Processed/Valuated
+        # by CLAIM_PROGRESS_WEIGHTS (see GenerateClaimsProgressDistributionTest),
+        # so "normal" here means "not rejected", not "still Entered".
+        normal = claims.exclude(status=Claim.STATUS_REJECTED)
 
         self.assertAlmostEqual(auto_rejected.count() / sample_size, AUTOMATIC_REJECTION_RATE, delta=0.03)
         self.assertAlmostEqual(mo_rejected.count() / sample_size, MEDICAL_OFFICER_REJECTION_RATE, delta=0.02)
