@@ -2,8 +2,11 @@ from datetime import date, timedelta
 
 from django.test import TestCase
 
-from claim.management.commands.seed_synthetic_health_data import CARE_TYPE_WEIGHTS, BulkInsureeGenerator
-from claim.models import Claim
+from claim.management.commands.seed_synthetic_health_data import (
+    AUTOMATIC_REJECTION_RATE, CARE_TYPE_WEIGHTS, MEDICAL_OFFICER_REJECTION_RATE,
+    MEDICAL_OFFICER_REJECTION_REASON, BulkInsureeGenerator,
+)
+from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
 from insuree.test_helpers import create_test_insuree
 from location.test_helpers import create_test_health_facility, create_test_village
 from medical.models import Diagnosis
@@ -149,3 +152,84 @@ class GenerateClaimsDateCoherenceTest(TestCase):
 
         # With 60 draws, all three visit types should show up (sanity check on randomization).
         self.assertEqual(visit_types_seen, {"O", "E", "R"})
+
+
+class GenerateClaimsStatusDistributionTest(TestCase):
+    """Claim status must follow the configured automatic / Medical Officer
+    rejection rates, and rejections must cascade to items and services."""
+
+    def setUp(self):
+        self.generator = BulkInsureeGenerator(batch_size=50)
+        village = create_test_village()
+        district = village.parent.parent
+        health_facility = create_test_health_facility("SEED2", district.id, valid=True)
+        self.insuree = create_test_insuree(
+            custom_props={"chf_id": "seedstatustest", "health_facility": health_facility}
+        )
+        product = create_test_product("SEEDT03")
+        self.policy, _ = create_test_policy2(
+            product, self.insuree, link=False,
+            custom_props={
+                "effective_date": date.today() - timedelta(days=500),
+                "expiry_date": date.today() - timedelta(days=50),
+            },
+        )
+        self.generator.diagnoses = [Diagnosis.objects.create(code="ICDSEED2", name="seed diag 2", audit_user_id=-1)]
+        self.generator.items = [create_test_item("D")]
+        self.generator.services = [create_test_service("V")]
+        self.generator.health_facilities = [health_facility]
+
+    def test_status_distribution_matches_configured_rates(self):
+        policy_by_family = {self.insuree.family_id: self.policy}
+        sample_size = 3000
+
+        self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
+
+        claims = Claim.objects.filter(insuree=self.insuree)
+        self.assertEqual(claims.count(), sample_size)
+
+        auto_rejected = claims.filter(status=Claim.STATUS_REJECTED, review_status=Claim.REVIEW_IDLE)
+        mo_rejected = claims.filter(status=Claim.STATUS_REJECTED, review_status=Claim.REVIEW_DELIVERED)
+        normal = claims.filter(status=Claim.STATUS_ENTERED)
+
+        self.assertAlmostEqual(auto_rejected.count() / sample_size, AUTOMATIC_REJECTION_RATE, delta=0.03)
+        self.assertAlmostEqual(mo_rejected.count() / sample_size, MEDICAL_OFFICER_REJECTION_RATE, delta=0.02)
+        self.assertAlmostEqual(normal.count() / sample_size, 1 - AUTOMATIC_REJECTION_RATE - MEDICAL_OFFICER_REJECTION_RATE, delta=0.03)
+
+        # Every Medical Officer rejection carries the manual reason and a reviewer audit id.
+        for claim in mo_rejected:
+            self.assertEqual(claim.rejection_reason, MEDICAL_OFFICER_REJECTION_REASON)
+            self.assertIsNotNone(claim.audit_user_id_review)
+
+        # Normal (non-rejected) claims must not carry a rejection reason.
+        for claim in normal:
+            self.assertEqual(claim.rejection_reason, 0)
+
+    def test_rejected_claims_cascade_status_to_items_and_services(self):
+        policy_by_family = {self.insuree.family_id: self.policy}
+        sample_size = 500
+
+        self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
+
+        rejected_claims = Claim.objects.filter(insuree=self.insuree, status=Claim.STATUS_REJECTED)
+        passed_claims = Claim.objects.filter(insuree=self.insuree, status=Claim.STATUS_ENTERED)
+        self.assertGreater(rejected_claims.count(), 0)
+        self.assertGreater(passed_claims.count(), 0)
+
+        for claim in rejected_claims:
+            for item in ClaimItem.objects.filter(claim=claim):
+                self.assertEqual(item.status, ClaimDetail.STATUS_REJECTED)
+                self.assertEqual(item.rejection_reason, claim.rejection_reason)
+                self.assertEqual(item.qty_approved, 0)
+            for service in ClaimService.objects.filter(claim=claim):
+                self.assertEqual(service.status, ClaimDetail.STATUS_REJECTED)
+                self.assertEqual(service.rejection_reason, claim.rejection_reason)
+                self.assertEqual(service.qty_approved, 0)
+
+        for claim in passed_claims:
+            for item in ClaimItem.objects.filter(claim=claim):
+                self.assertEqual(item.status, ClaimDetail.STATUS_PASSED)
+                self.assertIsNone(item.rejection_reason)
+            for service in ClaimService.objects.filter(claim=claim):
+                self.assertEqual(service.status, ClaimDetail.STATUS_PASSED)
+                self.assertIsNone(service.rejection_reason)

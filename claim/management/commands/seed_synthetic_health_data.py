@@ -34,7 +34,15 @@ from django.db import connection, transaction
 from django.utils import timezone
 from faker import Faker
 # Local app imports
-from claim.models import Claim, ClaimItem, ClaimService
+from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
+from claim.validations import (
+    REJECTION_REASON_CARE_TYPE, REJECTION_REASON_CATEGORY_LIMITATION,
+    REJECTION_REASON_FAMILY, REJECTION_REASON_FREQUENCY_FAILURE,
+    REJECTION_REASON_INVALID_CLAIM, REJECTION_REASON_INVALID_ITEM_OR_SERVICE,
+    REJECTION_REASON_NOT_IN_PRICE_LIST, REJECTION_REASON_NO_COVERAGE,
+    REJECTION_REASON_NO_PRODUCT_FOUND, REJECTION_REASON_QTY_OVER_LIMIT,
+    REJECTION_REASON_TARGET_DATE, REJECTION_REASON_WAITING_PERIOD_FAIL,
+)
 from core.models import Officer
 from insuree.models import (ConfirmationType, Education, Family, FamilyType,
                             Gender, IdentificationType, Insuree, InsureePolicy,
@@ -57,6 +65,26 @@ CARE_TYPE_WEIGHTS = {
     "IPD": 17,  # in-patient claims: ~15-20% of all claims
     "OPD": 83,  # out-patient claims: the remainder
 }
+
+# Claim status distribution. The remainder (1 - AUTOMATIC_REJECTION_RATE -
+# MEDICAL_OFFICER_REJECTION_RATE) stays in the normal STATUS_ENTERED flow.
+AUTOMATIC_REJECTION_RATE = 0.10
+MEDICAL_OFFICER_REJECTION_RATE = 0.03
+
+# Codes a real automatic validation run (see claim.validations.validate_claim)
+# can produce before a claim ever reaches human review.
+AUTOMATIC_REJECTION_REASONS = [
+    REJECTION_REASON_INVALID_ITEM_OR_SERVICE, REJECTION_REASON_NOT_IN_PRICE_LIST,
+    REJECTION_REASON_NO_PRODUCT_FOUND, REJECTION_REASON_CATEGORY_LIMITATION,
+    REJECTION_REASON_FREQUENCY_FAILURE, REJECTION_REASON_FAMILY,
+    REJECTION_REASON_TARGET_DATE, REJECTION_REASON_CARE_TYPE,
+    REJECTION_REASON_QTY_OVER_LIMIT, REJECTION_REASON_WAITING_PERIOD_FAIL,
+    REJECTION_REASON_NO_COVERAGE,
+]
+# REJECTION_REASON_INVALID_CLAIM (20) is the generic reason used when a
+# Medical Officer manually rejects a claim during review.
+MEDICAL_OFFICER_REJECTION_REASON = REJECTION_REASON_INVALID_CLAIM
+
 
 class PostgreSQLOptimizer: #for quick generation , this is only for developement and testing do not use in production!!
     """PostgreSQL-specific optimizations for bulk operations"""
@@ -239,6 +267,20 @@ class BulkInsureeGenerator:
         latest = min(policy.expiry_date, date.today())
         return earliest, latest
 
+    def _get_claim_status_fields(self):
+        """Randomly assign a claim's terminal status per configured rejection rates.
+
+        Returns (status, review_status, rejection_reason, audit_user_id_review).
+        """
+        roll = random.random()
+        if roll < AUTOMATIC_REJECTION_RATE:
+            # Rejected before ever reaching a human reviewer.
+            return Claim.STATUS_REJECTED, Claim.REVIEW_IDLE, random.choice(AUTOMATIC_REJECTION_REASONS), None
+        if roll < AUTOMATIC_REJECTION_RATE + MEDICAL_OFFICER_REJECTION_RATE:
+            # Reviewed and rejected by a Medical Officer.
+            return Claim.STATUS_REJECTED, Claim.REVIEW_DELIVERED, MEDICAL_OFFICER_REJECTION_REASON, 1
+        return Claim.STATUS_ENTERED, Claim.REVIEW_IDLE, 0, None
+
     def _generate_claims(self, all_insurees, num_claims_per_insuree, policy_by_family):
         self.write(f"\n=== Generating {num_claims_per_insuree} claims for each of {len(all_insurees):,} insurees ===")
         claims_to_create = []
@@ -255,11 +297,13 @@ class BulkInsureeGenerator:
                 date_to = claim_date + timedelta(days=random.randint(2, 5)) if care_type == "IPD" else None
                 # Visit type: "O" ordinary, "E" emergency, "R" referral (see validations.visit_type_field).
                 visit_type = random.choice(["O", "E", "R"])
-                # Note: Setting status to ENTERED - claims admin will need to review, Also TODO: we need to find data diversity of claims
+                status, review_status, rejection_reason, audit_user_id_review = self._get_claim_status_fields()
+                # TODO: we need to find data diversity of claims
                 claim = Claim(
                     uuid=str(uuid.uuid4()), insuree=insuree, code=f"BULK-{uuid.uuid4()}",
                     date_from=claim_date, date_to=date_to, care_type=care_type, visit_type=visit_type,
-                    date_claimed=claim_date, status=Claim.STATUS_ENTERED,
+                    date_claimed=claim_date, status=status, review_status=review_status,
+                    rejection_reason=rejection_reason, audit_user_id_review=audit_user_id_review,
                     health_facility=insuree.health_facility or random.choice(self.health_facilities),
                     icd=random.choice(self.diagnoses), audit_user_id=1, claimed=0
                 )
@@ -271,21 +315,31 @@ class BulkInsureeGenerator:
         claim_totals = {c.id: Decimal(0) for c in created_claims}
 
         for claim in created_claims:
+            # Rejected claims (automatic or Medical Officer) must have their items/services
+            # marked as rejected too, with qty_approved cleared - mirrors claim.validations
+            # automatic checks (see validate_assign_prod_elt: qty_approved=0 on rejection).
+            is_rejected = claim.status == Claim.STATUS_REJECTED
+            detail_status = ClaimDetail.STATUS_REJECTED if is_rejected else ClaimDetail.STATUS_PASSED
+            detail_rejection_reason = claim.rejection_reason if is_rejected else None
+            detail_qty_approved = Decimal(0) if is_rejected else None
+
             # TODO: Make items/services count configurable instead of random, make it more realistic in TODO:
             for _ in range(random.randint(1, 4)): # 1-4 items per claim
                 price = Decimal(random.uniform(5.0, 150.0)).quantize(Decimal("0.01"))
                 qty = Decimal(random.randint(1, 5))
                 claim_items_to_create.append(ClaimItem(
-                    claim=claim, item=random.choice(self.items), status=1, qty_provided=qty,
+                    claim=claim, item=random.choice(self.items), status=detail_status, qty_provided=qty,
+                    qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
                     price_asked=price, audit_user_id=1, availability=True
                 ))
                 claim_totals[claim.id] += price * qty
-            
+
             for _ in range(random.randint(1, 3)): # 1-3 services per claim
                 price = Decimal(random.uniform(50.0, 500.0)).quantize(Decimal("0.01"))
                 qty = 1
                 claim_services_to_create.append(ClaimService(
-                    claim=claim, service=random.choice(self.services), status=1, qty_provided=qty,
+                    claim=claim, service=random.choice(self.services), status=detail_status, qty_provided=qty,
+                    qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
                     price_asked=price, audit_user_id=1
                 ))
                 claim_totals[claim.id] += price * qty
