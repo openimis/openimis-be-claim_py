@@ -26,7 +26,7 @@ import gc
 import random
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand, CommandError
@@ -84,6 +84,20 @@ AUTOMATIC_REJECTION_REASONS = [
 # REJECTION_REASON_INVALID_CLAIM (20) is the generic reason used when a
 # Medical Officer manually rejects a claim during review.
 MEDICAL_OFFICER_REJECTION_REASON = REJECTION_REASON_INVALID_CLAIM
+
+# Processing-stage distribution, applied only to claims that are NOT rejected
+# (see AUTOMATIC_REJECTION_RATE / MEDICAL_OFFICER_REJECTION_RATE above).
+CLAIM_PROGRESS_WEIGHTS = {
+    "VALUATED": 40,
+    "PROCESSED": 30,
+    "SUBMIT": 20,
+    "ENTERED": 10,
+}
+# Random gaps (in days) between each stage's timestamp - dates are always
+# sequential: date_from -> submit_stamp -> process_stamp.
+SUBMIT_DELAY_RANGE_DAYS = (1, 15)  # date_from -> submit_stamp
+PROCESS_DELAY_RANGE_DAYS = (1, 15)  # submit_stamp -> process_stamp, for claims stopping at PROCESSED
+SUBMIT_TO_VALUATED_RANGE_DAYS = (1, 30)  # submit_stamp -> process_stamp, for claims reaching VALUATED
 
 
 class PostgreSQLOptimizer: #for quick generation , this is only for developement and testing do not use in production!!
@@ -281,6 +295,35 @@ class BulkInsureeGenerator:
             return Claim.STATUS_REJECTED, Claim.REVIEW_DELIVERED, MEDICAL_OFFICER_REJECTION_REASON, 1
         return Claim.STATUS_ENTERED, Claim.REVIEW_IDLE, 0, None
 
+    def _get_claim_progress_fields(self, claim_date):
+        """Randomly advance a non-rejected claim through Submit -> Processed -> Valuated.
+
+        Dates are sequential and start from claim_date (date_from). There is no
+        dedicated "date valuated" column on Claim, so - mirroring
+        claim.services.set_claim_processed_or_valuated - process_stamp is reused
+        as the valuation timestamp when a claim reaches VALUATED.
+
+        Returns (status, submit_stamp, process_stamp, date_processed,
+        audit_user_id_submit, audit_user_id_process).
+        """
+        progress = random.choices(
+            list(CLAIM_PROGRESS_WEIGHTS.keys()), weights=list(CLAIM_PROGRESS_WEIGHTS.values())
+        )[0]
+        if progress == "ENTERED":
+            return Claim.STATUS_ENTERED, None, None, None, None, None
+
+        submit_stamp = datetime.combine(claim_date, datetime.min.time()) + timedelta(
+            days=random.randint(*SUBMIT_DELAY_RANGE_DAYS)
+        )
+        if progress == "SUBMIT":
+            return Claim.STATUS_CHECKED, submit_stamp, None, None, 1, None
+        if progress == "PROCESSED":
+            process_stamp = submit_stamp + timedelta(days=random.randint(*PROCESS_DELAY_RANGE_DAYS))
+            return Claim.STATUS_PROCESSED, submit_stamp, process_stamp, process_stamp.date(), 1, 1
+        # VALUATED
+        process_stamp = submit_stamp + timedelta(days=random.randint(*SUBMIT_TO_VALUATED_RANGE_DAYS))
+        return Claim.STATUS_VALUATED, submit_stamp, process_stamp, None, 1, 1
+
     def _generate_claims(self, all_insurees, num_claims_per_insuree, policy_by_family):
         self.write(f"\n=== Generating {num_claims_per_insuree} claims for each of {len(all_insurees):,} insurees ===")
         claims_to_create = []
@@ -298,12 +341,19 @@ class BulkInsureeGenerator:
                 # Visit type: "O" ordinary, "E" emergency, "R" referral (see validations.visit_type_field).
                 visit_type = random.choice(["O", "E", "R"])
                 status, review_status, rejection_reason, audit_user_id_review = self._get_claim_status_fields()
+                submit_stamp = process_stamp = date_processed = None
+                audit_user_id_submit = audit_user_id_process = None
+                if status != Claim.STATUS_REJECTED:
+                    (status, submit_stamp, process_stamp, date_processed,
+                     audit_user_id_submit, audit_user_id_process) = self._get_claim_progress_fields(claim_date)
                 # TODO: we need to find data diversity of claims
                 claim = Claim(
                     uuid=str(uuid.uuid4()), insuree=insuree, code=f"BULK-{uuid.uuid4()}",
                     date_from=claim_date, date_to=date_to, care_type=care_type, visit_type=visit_type,
                     date_claimed=claim_date, status=status, review_status=review_status,
                     rejection_reason=rejection_reason, audit_user_id_review=audit_user_id_review,
+                    submit_stamp=submit_stamp, process_stamp=process_stamp, date_processed=date_processed,
+                    audit_user_id_submit=audit_user_id_submit, audit_user_id_process=audit_user_id_process,
                     health_facility=insuree.health_facility or random.choice(self.health_facilities),
                     icd=random.choice(self.diagnoses), audit_user_id=1, claimed=0
                 )

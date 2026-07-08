@@ -1,11 +1,14 @@
 from datetime import date, timedelta
 from types import SimpleNamespace
+from unittest import mock
 
 from django.test import TestCase
 
 from claim.management.commands.seed_synthetic_health_data import (
-    AUTOMATIC_REJECTION_RATE, CARE_TYPE_WEIGHTS, MEDICAL_OFFICER_REJECTION_RATE,
-    MEDICAL_OFFICER_REJECTION_REASON, BulkInsureeGenerator,
+    AUTOMATIC_REJECTION_RATE, CARE_TYPE_WEIGHTS, CLAIM_PROGRESS_WEIGHTS,
+    MEDICAL_OFFICER_REJECTION_RATE, MEDICAL_OFFICER_REJECTION_REASON,
+    PROCESS_DELAY_RANGE_DAYS, SUBMIT_DELAY_RANGE_DAYS,
+    SUBMIT_TO_VALUATED_RANGE_DAYS, BulkInsureeGenerator,
 )
 from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
 from insuree.test_helpers import create_test_insuree
@@ -227,3 +230,152 @@ class GenerateClaimsStatusDistributionTest(TestCase):
             for service in ClaimService.objects.filter(claim=claim):
                 self.assertEqual(service.status, ClaimDetail.STATUS_PASSED)
                 self.assertIsNone(service.rejection_reason)
+
+
+class GetClaimProgressFieldsTest(TestCase):
+    """Rule: non-rejected claims progress Entered -> Submit -> Processed ->
+    Valuated with sequential, random-gap dates."""
+
+    def setUp(self):
+        self.generator = BulkInsureeGenerator()
+        self.claim_date = date.today() - timedelta(days=60)
+
+    def test_entered_has_no_stamps(self):
+        with self._force_progress("ENTERED"):
+            status, submit_stamp, process_stamp, date_processed, audit_submit, audit_process = (
+                self.generator._get_claim_progress_fields(self.claim_date)
+            )
+
+        self.assertEqual(status, Claim.STATUS_ENTERED)
+        self.assertIsNone(submit_stamp)
+        self.assertIsNone(process_stamp)
+        self.assertIsNone(date_processed)
+        self.assertIsNone(audit_submit)
+        self.assertIsNone(audit_process)
+
+    def test_submit_sets_only_submit_stamp_after_claim_date(self):
+        with self._force_progress("SUBMIT"):
+            status, submit_stamp, process_stamp, date_processed, audit_submit, audit_process = (
+                self.generator._get_claim_progress_fields(self.claim_date)
+            )
+
+        self.assertEqual(status, Claim.STATUS_CHECKED)
+        self.assertIsNotNone(submit_stamp)
+        self.assertGreaterEqual(submit_stamp.date(), self.claim_date)
+        self.assertIsNone(process_stamp)
+        self.assertIsNone(date_processed)
+        self.assertEqual(audit_submit, 1)
+        self.assertIsNone(audit_process)
+
+    def test_processed_sets_sequential_submit_and_process_stamps(self):
+        with self._force_progress("PROCESSED"):
+            status, submit_stamp, process_stamp, date_processed, audit_submit, audit_process = (
+                self.generator._get_claim_progress_fields(self.claim_date)
+            )
+
+        self.assertEqual(status, Claim.STATUS_PROCESSED)
+        self.assertGreaterEqual(submit_stamp.date(), self.claim_date)
+        self.assertGreater(process_stamp, submit_stamp)
+        self.assertEqual(date_processed, process_stamp.date())
+        self.assertEqual(audit_submit, 1)
+        self.assertEqual(audit_process, 1)
+
+    def test_valuated_reuses_process_stamp_within_one_month_of_submit(self):
+        with self._force_progress("VALUATED"):
+            status, submit_stamp, process_stamp, date_processed, audit_submit, audit_process = (
+                self.generator._get_claim_progress_fields(self.claim_date)
+            )
+
+        self.assertEqual(status, Claim.STATUS_VALUATED)
+        self.assertGreaterEqual(submit_stamp.date(), self.claim_date)
+        self.assertGreater(process_stamp, submit_stamp)
+        gap_days = (process_stamp.date() - submit_stamp.date()).days
+        self.assertGreaterEqual(gap_days, SUBMIT_TO_VALUATED_RANGE_DAYS[0])
+        self.assertLessEqual(gap_days, SUBMIT_TO_VALUATED_RANGE_DAYS[1])
+        # No dedicated date_valuated column exists - process_stamp is reused instead.
+        self.assertIsNone(date_processed)
+        self.assertEqual(audit_submit, 1)
+        self.assertEqual(audit_process, 1)
+
+    def _force_progress(self, progress_key):
+        return mock.patch("random.choices", return_value=[progress_key])
+
+
+class GenerateClaimsProgressDistributionTest(TestCase):
+    """Non-rejected claims must follow CLAIM_PROGRESS_WEIGHTS and carry
+    sequential submit/process dates; rejected claims must not."""
+
+    def setUp(self):
+        self.generator = BulkInsureeGenerator(batch_size=50)
+        village = create_test_village()
+        district = village.parent.parent
+        health_facility = create_test_health_facility("SEED3", district.id, valid=True)
+        self.insuree = create_test_insuree(
+            custom_props={"chf_id": "seedprogresstest", "health_facility": health_facility}
+        )
+        product = create_test_product("SEEDT04")
+        self.policy, _ = create_test_policy2(
+            product, self.insuree, link=False,
+            custom_props={
+                "effective_date": date.today() - timedelta(days=500),
+                "expiry_date": date.today() - timedelta(days=50),
+            },
+        )
+        self.generator.diagnoses = [Diagnosis.objects.create(code="ICDSEED3", name="seed diag 3", audit_user_id=-1)]
+        self.generator.items = [create_test_item("D")]
+        self.generator.services = [create_test_service("V")]
+        self.generator.health_facilities = [health_facility]
+
+    def test_progress_distribution_matches_configured_weights(self):
+        policy_by_family = {self.insuree.family_id: self.policy}
+        sample_size = 3000
+
+        self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
+
+        non_rejected = Claim.objects.filter(insuree=self.insuree).exclude(status=Claim.STATUS_REJECTED)
+        total_non_rejected = non_rejected.count()
+        total_weight = sum(CLAIM_PROGRESS_WEIGHTS.values())
+
+        status_by_progress = {
+            "ENTERED": Claim.STATUS_ENTERED, "SUBMIT": Claim.STATUS_CHECKED,
+            "PROCESSED": Claim.STATUS_PROCESSED, "VALUATED": Claim.STATUS_VALUATED,
+        }
+        for progress, status in status_by_progress.items():
+            expected_ratio = CLAIM_PROGRESS_WEIGHTS[progress] / total_weight
+            actual_ratio = non_rejected.filter(status=status).count() / total_non_rejected
+            self.assertAlmostEqual(actual_ratio, expected_ratio, delta=0.04)
+
+    def test_dates_are_sequential_and_stamps_match_status(self):
+        policy_by_family = {self.insuree.family_id: self.policy}
+
+        self.generator._generate_claims([self.insuree], 500, policy_by_family)
+
+        claims = Claim.objects.filter(insuree=self.insuree)
+        for claim in claims:
+            if claim.status == Claim.STATUS_REJECTED:
+                self.assertIsNone(claim.submit_stamp)
+                self.assertIsNone(claim.process_stamp)
+                self.assertIsNone(claim.date_processed)
+            elif claim.status == Claim.STATUS_ENTERED:
+                self.assertIsNone(claim.submit_stamp)
+                self.assertIsNone(claim.process_stamp)
+            elif claim.status == Claim.STATUS_CHECKED:
+                self.assertIsNotNone(claim.submit_stamp)
+                self.assertGreaterEqual(claim.submit_stamp.date(), claim.date_from)
+                self.assertIsNone(claim.process_stamp)
+                self.assertEqual(claim.audit_user_id_submit, 1)
+            elif claim.status == Claim.STATUS_PROCESSED:
+                self.assertGreaterEqual(claim.submit_stamp.date(), claim.date_from)
+                self.assertGreater(claim.process_stamp, claim.submit_stamp)
+                self.assertEqual(claim.date_processed, claim.process_stamp.date())
+                self.assertEqual(claim.audit_user_id_submit, 1)
+                self.assertEqual(claim.audit_user_id_process, 1)
+            elif claim.status == Claim.STATUS_VALUATED:
+                self.assertGreaterEqual(claim.submit_stamp.date(), claim.date_from)
+                self.assertGreater(claim.process_stamp, claim.submit_stamp)
+                gap_days = (claim.process_stamp.date() - claim.submit_stamp.date()).days
+                self.assertGreaterEqual(gap_days, SUBMIT_TO_VALUATED_RANGE_DAYS[0])
+                self.assertLessEqual(gap_days, SUBMIT_TO_VALUATED_RANGE_DAYS[1])
+                self.assertIsNone(claim.date_processed)
+                self.assertEqual(claim.audit_user_id_submit, 1)
+                self.assertEqual(claim.audit_user_id_process, 1)
