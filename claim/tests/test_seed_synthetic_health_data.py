@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from types import SimpleNamespace
 
 from django.test import TestCase
 
@@ -17,42 +18,35 @@ from product.test_helpers import create_test_product
 
 class GetClaimDateRangeTest(TestCase):
     """Rule: a claim date must never precede the insuree's policy, and must
-    not be in the future even if the policy is still active."""
+    not be in the future even if the policy is still active.
+
+    _get_claim_date_range only reads policy.effective_date/expiry_date and
+    insuree.family_id, so a lightweight double is enough here
+    """
 
     def setUp(self):
         self.generator = BulkInsureeGenerator()
         self.insuree = create_test_insuree()
-        self.product = create_test_product("SEEDT01")
 
     def test_active_policy_caps_latest_date_to_today(self):
-        policy, _ = create_test_policy2(
-            self.product, self.insuree, link=False,
-            custom_props={
-                "effective_date": date.today() - timedelta(days=400),
-                "expiry_date": date.today() + timedelta(days=100),
-            },
-        )
+        effective_date = date.today() - timedelta(days=400)
+        policy = SimpleNamespace(effective_date=effective_date, expiry_date=date.today() + timedelta(days=100))
         policy_by_family = {self.insuree.family_id: policy}
 
         earliest, latest = self.generator._get_claim_date_range(self.insuree, policy_by_family)
 
-        self.assertEqual(earliest, policy.effective_date)
+        self.assertEqual(earliest, effective_date)
         self.assertEqual(latest, date.today())
 
     def test_expired_policy_caps_latest_date_to_expiry(self):
+        effective_date = date.today() - timedelta(days=400)
         expiry = date.today() - timedelta(days=10)
-        policy, _ = create_test_policy2(
-            self.product, self.insuree, link=False,
-            custom_props={
-                "effective_date": date.today() - timedelta(days=400),
-                "expiry_date": expiry,
-            },
-        )
+        policy = SimpleNamespace(effective_date=effective_date, expiry_date=expiry)
         policy_by_family = {self.insuree.family_id: policy}
 
         earliest, latest = self.generator._get_claim_date_range(self.insuree, policy_by_family)
 
-        self.assertEqual(earliest, policy.effective_date)
+        self.assertEqual(earliest, effective_date)
         self.assertEqual(latest, expiry)
 
     def test_no_policy_falls_back_to_two_year_window_ending_today(self):
