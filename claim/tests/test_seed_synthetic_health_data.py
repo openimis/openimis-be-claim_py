@@ -417,31 +417,32 @@ class SetupReferenceDataValidityTest(TestCase):
 
     def test_expired_product_is_excluded(self):
         valid_product = create_test_product("VALIDPR", valid=True)
-        create_test_product("EXPIREDPR", valid=False)
+        create_test_product("EXPIRPR", valid=False)
 
         self.generator.setup_reference_data(generate_claims=False)
 
         product_codes = {p.code for p in self.generator.products}
         self.assertIn(valid_product.code, product_codes)
-        self.assertNotIn("EXPIREDPR", product_codes)
+        self.assertNotIn("EXPIRPR", product_codes)
 
     def test_expired_diagnosis_item_and_service_are_excluded(self):
         create_test_health_facility("VALIDHF2", self.district.id, valid=True)
         create_test_officer(valid=True)
         create_test_product("VALIDPR2", valid=True)
 
-        valid_diag = Diagnosis.objects.create(code="VALIDICD", name="valid diag", audit_user_id=-1)
-        Diagnosis.objects.create(code="EXPICD", name="expired diag", audit_user_id=-1, validity_to=date.today())
-        valid_item = create_test_item("D", valid=True, custom_props={"code": "VALIDITM"})
-        create_test_item("D", valid=False, custom_props={"code": "EXPITM"})
+        # Diagnosis.code and Item.code are limited to 6 characters in the DB schema.
+        valid_diag = Diagnosis.objects.create(code="VALDIC", name="valid diag", audit_user_id=-1)
+        Diagnosis.objects.create(code="EXPDIC", name="expired diag", audit_user_id=-1, validity_to=date.today())
+        valid_item = create_test_item("D", valid=True, custom_props={"code": "VALIT"})
+        create_test_item("D", valid=False, custom_props={"code": "EXPIT"})
         valid_service = create_test_service("V", valid=True, custom_props={"code": "VALIDSVC"})
         create_test_service("V", valid=False, custom_props={"code": "EXPSVC"})
 
         self.generator.setup_reference_data(generate_claims=True)
 
         self.assertIn(valid_diag.code, {d.code for d in self.generator.diagnoses})
-        self.assertNotIn("EXPICD", {d.code for d in self.generator.diagnoses})
+        self.assertNotIn("EXPDIC", {d.code for d in self.generator.diagnoses})
         self.assertIn(valid_item.code, {i.code for i in self.generator.items})
-        self.assertNotIn("EXPITM", {i.code for i in self.generator.items})
+        self.assertNotIn("EXPIT", {i.code for i in self.generator.items})
         self.assertIn(valid_service.code, {s.code for s in self.generator.services})
         self.assertNotIn("EXPSVC", {s.code for s in self.generator.services})
