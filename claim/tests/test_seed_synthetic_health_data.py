@@ -11,6 +11,7 @@ from claim.management.commands.seed_synthetic_health_data import (
     SUBMIT_TO_VALUATED_RANGE_DAYS, BulkInsureeGenerator,
 )
 from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
+from core.test_helpers import create_test_officer
 from insuree.test_helpers import create_test_insuree
 from location.test_helpers import create_test_health_facility, create_test_village
 from medical.models import Diagnosis
@@ -382,3 +383,65 @@ class GenerateClaimsProgressDistributionTest(TestCase):
                 self.assertIsNone(claim.date_processed)
                 self.assertEqual(claim.audit_user_id_submit, 1)
                 self.assertEqual(claim.audit_user_id_process, 1)
+
+
+class SetupReferenceDataValidityTest(TestCase):
+    """Rule: reference data used to build claims (health facilities, products,
+    officers, diagnoses, items, services) must be currently valid
+    (validity_to IS NULL) - expired/superseded rows must never be picked."""
+
+    def setUp(self):
+        self.generator = BulkInsureeGenerator()
+        self.village = create_test_village()
+        self.district = self.village.parent.parent
+
+    def test_expired_health_facility_is_excluded(self):
+        valid_hf = create_test_health_facility("VALIDHF", self.district.id, valid=True)
+        create_test_health_facility("EXPHF", self.district.id, valid=False)
+
+        self.generator.setup_reference_data(generate_claims=False)
+
+        hf_codes = {hf.code for hf in self.generator.health_facilities}
+        self.assertIn(valid_hf.code, hf_codes)
+        self.assertNotIn("EXPHF", hf_codes)
+
+    def test_expired_officer_is_excluded(self):
+        valid_officer = create_test_officer(valid=True, custom_props={"code": "VALIDOFF"})
+        create_test_officer(valid=False, custom_props={"code": "EXPOFF"})
+
+        self.generator.setup_reference_data(generate_claims=False)
+
+        officer_codes = {o.code for o in self.generator.officers}
+        self.assertIn(valid_officer.code, officer_codes)
+        self.assertNotIn("EXPOFF", officer_codes)
+
+    def test_expired_product_is_excluded(self):
+        valid_product = create_test_product("VALIDPR", valid=True)
+        create_test_product("EXPIREDPR", valid=False)
+
+        self.generator.setup_reference_data(generate_claims=False)
+
+        product_codes = {p.code for p in self.generator.products}
+        self.assertIn(valid_product.code, product_codes)
+        self.assertNotIn("EXPIREDPR", product_codes)
+
+    def test_expired_diagnosis_item_and_service_are_excluded(self):
+        create_test_health_facility("VALIDHF2", self.district.id, valid=True)
+        create_test_officer(valid=True)
+        create_test_product("VALIDPR2", valid=True)
+
+        valid_diag = Diagnosis.objects.create(code="VALIDICD", name="valid diag", audit_user_id=-1)
+        Diagnosis.objects.create(code="EXPICD", name="expired diag", audit_user_id=-1, validity_to=date.today())
+        valid_item = create_test_item("D", valid=True, custom_props={"code": "VALIDITM"})
+        create_test_item("D", valid=False, custom_props={"code": "EXPITM"})
+        valid_service = create_test_service("V", valid=True, custom_props={"code": "VALIDSVC"})
+        create_test_service("V", valid=False, custom_props={"code": "EXPSVC"})
+
+        self.generator.setup_reference_data(generate_claims=True)
+
+        self.assertIn(valid_diag.code, {d.code for d in self.generator.diagnoses})
+        self.assertNotIn("EXPICD", {d.code for d in self.generator.diagnoses})
+        self.assertIn(valid_item.code, {i.code for i in self.generator.items})
+        self.assertNotIn("EXPITM", {i.code for i in self.generator.items})
+        self.assertIn(valid_service.code, {s.code for s in self.generator.services})
+        self.assertNotIn("EXPSVC", {s.code for s in self.generator.services})

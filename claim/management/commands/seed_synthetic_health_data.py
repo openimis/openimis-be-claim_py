@@ -151,29 +151,30 @@ class BulkInsureeGenerator:
     def setup_reference_data(self, generate_claims=False):
         """Cache reference data to avoid repeated DB queries"""
         self.write("Loading and setting up reference data...")
-        self.genders = list(Gender.objects.all()) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
-        self.family_types = list(FamilyType.objects.all()) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
-        # TODO: Filter out inactive locations - currently including all which might cause issues
-        self.locations = list(Location.objects.all()[:200])
-        self.health_facilities = list(HealthFacility.objects.all()[:100])
-        self.products = list(Product.objects.all()[:20])
+        # validity_to__isnull=True selects only currently-valid rows (openIMIS VersionedModel convention):
+        # a non-null validity_to means the row was superseded/deactivated and must not be reused for new claims.
+        self.genders = list(Gender.objects.filter(validity_to__isnull=True)) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
+        self.family_types = list(FamilyType.objects.filter(validity_to__isnull=True)) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
+        self.locations = list(Location.objects.filter(validity_to__isnull=True)[:200])
+        self.health_facilities = list(HealthFacility.objects.filter(validity_to__isnull=True)[:100])
+        self.products = list(Product.objects.filter(validity_to__isnull=True)[:20])
         # TODO: Should we filter officers by district/region? Currently random assignment
-        self.officers = list(Officer.objects.all()[:50])
+        self.officers = list(Officer.objects.filter(validity_to__isnull=True)[:50])
 
         required_data = {
             "locations": self.locations, "health facilities": self.health_facilities,
             "products": self.products, "officers": self.officers
         }
         for name, data_list in required_data.items():
-            if not data_list: raise CommandError(f"No data found for {name}. Please populate reference data.")
+            if not data_list: raise CommandError(f"No valid data found for {name}. Please populate reference data.")
 
         if generate_claims:
-            self.diagnoses = list(Diagnosis.objects.all()[:500])
-            self.items = list(Item.objects.all()[:1000])
-            self.services = list(Service.objects.all()[:500])
+            self.diagnoses = list(Diagnosis.objects.filter(validity_to__isnull=True)[:500])
+            self.items = list(Item.objects.filter(validity_to__isnull=True)[:1000])
+            self.services = list(Service.objects.filter(validity_to__isnull=True)[:500])
             required_claim_data = { "diagnoses": self.diagnoses, "medical items": self.items, "medical services": self.services }
             for name, data_list in required_claim_data.items():
-                if not data_list: raise CommandError(f"To generate claims, please populate reference data for {name}.")
+                if not data_list: raise CommandError(f"To generate claims, please populate valid reference data for {name}.")
         self.write("Reference data loaded.")
 
     def _bulk_create_with_progress(self, model_class, objects, description):
