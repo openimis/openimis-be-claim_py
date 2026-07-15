@@ -26,7 +26,7 @@ import gc
 import random
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand, CommandError
@@ -34,7 +34,15 @@ from django.db import connection, transaction
 from django.utils import timezone
 from faker import Faker
 # Local app imports
-from claim.models import Claim, ClaimItem, ClaimService
+from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
+from claim.validations import (
+    REJECTION_REASON_CARE_TYPE, REJECTION_REASON_CATEGORY_LIMITATION,
+    REJECTION_REASON_FAMILY, REJECTION_REASON_FREQUENCY_FAILURE,
+    REJECTION_REASON_INVALID_CLAIM, REJECTION_REASON_INVALID_ITEM_OR_SERVICE,
+    REJECTION_REASON_NOT_IN_PRICE_LIST, REJECTION_REASON_NO_COVERAGE,
+    REJECTION_REASON_NO_PRODUCT_FOUND, REJECTION_REASON_QTY_OVER_LIMIT,
+    REJECTION_REASON_TARGET_DATE, REJECTION_REASON_WAITING_PERIOD_FAIL,
+)
 from core.models import Officer
 from insuree.models import (ConfirmationType, Education, Family, FamilyType,
                             Gender, IdentificationType, Insuree, InsureePolicy,
@@ -43,6 +51,53 @@ from location.models import HealthFacility, Location
 from medical.models import Diagnosis, Item, Service
 from policy.models import Policy
 from product.models import Product
+
+
+# ---------------------------------------------------------------------------
+# Synthetic data distribution parameters
+#
+# Tune these to make generated data match real-world proportions instead of
+# a naive uniform random.choice(). Weights are relative, not percentages -
+# random.choices() normalizes them, but the values below are chosen so the
+# CARE_TYPE_WEIGHTS ratio already reads as 15-20% IPD / 80-85% OPD.
+# ---------------------------------------------------------------------------
+CARE_TYPE_WEIGHTS = {
+    "IPD": 17,  # in-patient claims: ~15-20% of all claims
+    "OPD": 83,  # out-patient claims: the remainder
+}
+
+# Claim status distribution. The remainder (1 - AUTOMATIC_REJECTION_RATE -
+# MEDICAL_OFFICER_REJECTION_RATE) stays in the normal STATUS_ENTERED flow.
+AUTOMATIC_REJECTION_RATE = 0.10
+MEDICAL_OFFICER_REJECTION_RATE = 0.03
+
+# Codes a real automatic validation run (see claim.validations.validate_claim)
+# can produce before a claim ever reaches human review.
+AUTOMATIC_REJECTION_REASONS = [
+    REJECTION_REASON_INVALID_ITEM_OR_SERVICE, REJECTION_REASON_NOT_IN_PRICE_LIST,
+    REJECTION_REASON_NO_PRODUCT_FOUND, REJECTION_REASON_CATEGORY_LIMITATION,
+    REJECTION_REASON_FREQUENCY_FAILURE, REJECTION_REASON_FAMILY,
+    REJECTION_REASON_TARGET_DATE, REJECTION_REASON_CARE_TYPE,
+    REJECTION_REASON_QTY_OVER_LIMIT, REJECTION_REASON_WAITING_PERIOD_FAIL,
+    REJECTION_REASON_NO_COVERAGE,
+]
+# REJECTION_REASON_INVALID_CLAIM (20) is the generic reason used when a
+# Medical Officer manually rejects a claim during review.
+MEDICAL_OFFICER_REJECTION_REASON = REJECTION_REASON_INVALID_CLAIM
+
+# Processing-stage distribution, applied only to claims that are NOT rejected
+# (see AUTOMATIC_REJECTION_RATE / MEDICAL_OFFICER_REJECTION_RATE above).
+CLAIM_PROGRESS_WEIGHTS = {
+    "VALUATED": 40,
+    "PROCESSED": 30,
+    "SUBMIT": 20,
+    "ENTERED": 10,
+}
+# Random gaps (in days) between each stage's timestamp - dates are always
+# sequential: date_from -> submit_stamp -> process_stamp.
+SUBMIT_DELAY_RANGE_DAYS = (1, 15)  # date_from -> submit_stamp
+PROCESS_DELAY_RANGE_DAYS = (1, 15)  # submit_stamp -> process_stamp, for claims stopping at PROCESSED
+SUBMIT_TO_VALUATED_RANGE_DAYS = (1, 30)  # submit_stamp -> process_stamp, for claims reaching VALUATED
 
 
 class PostgreSQLOptimizer: #for quick generation , this is only for developement and testing do not use in production!!
@@ -96,29 +151,30 @@ class BulkInsureeGenerator:
     def setup_reference_data(self, generate_claims=False):
         """Cache reference data to avoid repeated DB queries"""
         self.write("Loading and setting up reference data...")
-        self.genders = list(Gender.objects.all()) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
-        self.family_types = list(FamilyType.objects.all()) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
-        # TODO: Filter out inactive locations - currently including all which might cause issues
-        self.locations = list(Location.objects.all()[:200])
-        self.health_facilities = list(HealthFacility.objects.all()[:100])
-        self.products = list(Product.objects.all()[:20])
+        # validity_to__isnull=True selects only currently-valid rows (openIMIS VersionedModel convention):
+        # a non-null validity_to means the row was superseded/deactivated and must not be reused for new claims.
+        self.genders = list(Gender.objects.filter(validity_to__isnull=True)) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
+        self.family_types = list(FamilyType.objects.filter(validity_to__isnull=True)) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
+        self.locations = list(Location.objects.filter(validity_to__isnull=True)[:200])
+        self.health_facilities = list(HealthFacility.objects.filter(validity_to__isnull=True)[:100])
+        self.products = list(Product.objects.filter(validity_to__isnull=True)[:20])
         # TODO: Should we filter officers by district/region? Currently random assignment
-        self.officers = list(Officer.objects.all()[:50])
+        self.officers = list(Officer.objects.filter(validity_to__isnull=True)[:50])
 
         required_data = {
             "locations": self.locations, "health facilities": self.health_facilities,
             "products": self.products, "officers": self.officers
         }
         for name, data_list in required_data.items():
-            if not data_list: raise CommandError(f"No data found for {name}. Please populate reference data.")
+            if not data_list: raise CommandError(f"No valid data found for {name}. Please populate reference data.")
 
         if generate_claims:
-            self.diagnoses = list(Diagnosis.objects.all()[:500])
-            self.items = list(Item.objects.all()[:1000])
-            self.services = list(Service.objects.all()[:500])
+            self.diagnoses = list(Diagnosis.objects.filter(validity_to__isnull=True)[:500])
+            self.items = list(Item.objects.filter(validity_to__isnull=True)[:1000])
+            self.services = list(Service.objects.filter(validity_to__isnull=True)[:500])
             required_claim_data = { "diagnoses": self.diagnoses, "medical items": self.items, "medical services": self.services }
             for name, data_list in required_claim_data.items():
-                if not data_list: raise CommandError(f"To generate claims, please populate reference data for {name}.")
+                if not data_list: raise CommandError(f"To generate claims, please populate valid reference data for {name}.")
         self.write("Reference data loaded.")
 
     def _bulk_create_with_progress(self, model_class, objects, description):
@@ -210,16 +266,95 @@ class BulkInsureeGenerator:
         self._bulk_create_with_progress(InsureePolicy, insuree_policies, "InsureePolicy relationships")
         return len(insuree_policies)
 
-    def _generate_claims(self, all_insurees, num_claims_per_insuree):
+    def _get_claim_date_range(self, insuree, policy_by_family):
+        """Return (earliest, latest) valid dates for a claim on this insuree.
+
+        Claims must fall within the insuree's policy coverage period so that
+        we never claim before a policy exists. If no policy is found (e.g. a
+        fraudulent claim attempt with no active policy), fall back to a
+        2-year window ending today - such claims are expected to be rejected
+        downstream.
+        """
+        policy = policy_by_family.get(insuree.family_id)
+        if policy is None:
+            return date.today() - timedelta(days=730), date.today()
+        earliest = policy.effective_date
+        latest = min(policy.expiry_date, date.today())
+        return earliest, latest
+
+    def _get_claim_status_fields(self):
+        """Randomly assign a claim's terminal status per configured rejection rates.
+
+        Returns (status, review_status, rejection_reason, audit_user_id_review).
+        """
+        roll = random.random()
+        if roll < AUTOMATIC_REJECTION_RATE:
+            # Rejected before ever reaching a human reviewer.
+            return Claim.STATUS_REJECTED, Claim.REVIEW_IDLE, random.choice(AUTOMATIC_REJECTION_REASONS), None
+        if roll < AUTOMATIC_REJECTION_RATE + MEDICAL_OFFICER_REJECTION_RATE:
+            # Reviewed and rejected by a Medical Officer.
+            return Claim.STATUS_REJECTED, Claim.REVIEW_DELIVERED, MEDICAL_OFFICER_REJECTION_REASON, 1
+        return Claim.STATUS_ENTERED, Claim.REVIEW_IDLE, 0, None
+
+    def _get_claim_progress_fields(self, claim_date):
+        """Randomly advance a non-rejected claim through Submit -> Processed -> Valuated.
+
+        Dates are sequential and start from claim_date (date_from). There is no
+        dedicated "date valuated" column on Claim, so - mirroring
+        claim.services.set_claim_processed_or_valuated - process_stamp is reused
+        as the valuation timestamp when a claim reaches VALUATED.
+
+        Returns (status, submit_stamp, process_stamp, date_processed,
+        audit_user_id_submit, audit_user_id_process).
+        """
+        progress = random.choices(
+            list(CLAIM_PROGRESS_WEIGHTS.keys()), weights=list(CLAIM_PROGRESS_WEIGHTS.values())
+        )[0]
+        if progress == "ENTERED":
+            return Claim.STATUS_ENTERED, None, None, None, None, None
+
+        submit_stamp = datetime.combine(claim_date, datetime.min.time()) + timedelta(
+            days=random.randint(*SUBMIT_DELAY_RANGE_DAYS)
+        )
+        if progress == "SUBMIT":
+            return Claim.STATUS_CHECKED, submit_stamp, None, None, 1, None
+        if progress == "PROCESSED":
+            process_stamp = submit_stamp + timedelta(days=random.randint(*PROCESS_DELAY_RANGE_DAYS))
+            return Claim.STATUS_PROCESSED, submit_stamp, process_stamp, process_stamp.date(), 1, 1
+        # VALUATED
+        process_stamp = submit_stamp + timedelta(days=random.randint(*SUBMIT_TO_VALUATED_RANGE_DAYS))
+        return Claim.STATUS_VALUATED, submit_stamp, process_stamp, None, 1, 1
+
+    def _generate_claims(self, all_insurees, num_claims_per_insuree, policy_by_family):
         self.write(f"\n=== Generating {num_claims_per_insuree} claims for each of {len(all_insurees):,} insurees ===")
         claims_to_create = []
         for insuree in all_insurees:
+            earliest, latest = self._get_claim_date_range(insuree, policy_by_family)
+            span_days = (latest - earliest).days
             for _ in range(num_claims_per_insuree):
-                claim_date = date.today() - timedelta(days=random.randint(1, 80))
-                # Note: Setting status to ENTERED - claims admin will need to review, Also TODO: we need to find data diversity of claims
+                claim_date = earliest + timedelta(days=random.randint(0, span_days)) if span_days > 0 else earliest
+                # IPD (in-patient) claims require a stay, so date_to is a few days after date_from.
+                # OPD (out-patient) claims are same-day and leave date_to unset.
+                care_type = random.choices(
+                    list(CARE_TYPE_WEIGHTS.keys()), weights=list(CARE_TYPE_WEIGHTS.values())
+                )[0]
+                date_to = claim_date + timedelta(days=random.randint(2, 5)) if care_type == "IPD" else None
+                # Visit type: "O" ordinary, "E" emergency, "R" referral (see validations.visit_type_field).
+                visit_type = random.choice(["O", "E", "R"])
+                status, review_status, rejection_reason, audit_user_id_review = self._get_claim_status_fields()
+                submit_stamp = process_stamp = date_processed = None
+                audit_user_id_submit = audit_user_id_process = None
+                if status != Claim.STATUS_REJECTED:
+                    (status, submit_stamp, process_stamp, date_processed,
+                     audit_user_id_submit, audit_user_id_process) = self._get_claim_progress_fields(claim_date)
+                # TODO: we need to find data diversity of claims
                 claim = Claim(
                     uuid=str(uuid.uuid4()), insuree=insuree, code=f"BULK-{uuid.uuid4()}",
-                    date_from=claim_date, date_claimed=claim_date, status=Claim.STATUS_ENTERED,
+                    date_from=claim_date, date_to=date_to, care_type=care_type, visit_type=visit_type,
+                    date_claimed=claim_date, status=status, review_status=review_status,
+                    rejection_reason=rejection_reason, audit_user_id_review=audit_user_id_review,
+                    submit_stamp=submit_stamp, process_stamp=process_stamp, date_processed=date_processed,
+                    audit_user_id_submit=audit_user_id_submit, audit_user_id_process=audit_user_id_process,
                     health_facility=insuree.health_facility or random.choice(self.health_facilities),
                     icd=random.choice(self.diagnoses), audit_user_id=1, claimed=0
                 )
@@ -231,21 +366,31 @@ class BulkInsureeGenerator:
         claim_totals = {c.id: Decimal(0) for c in created_claims}
 
         for claim in created_claims:
+            # Rejected claims (automatic or Medical Officer) must have their items/services
+            # marked as rejected too, with qty_approved cleared - mirrors claim.validations
+            # automatic checks (see validate_assign_prod_elt: qty_approved=0 on rejection).
+            is_rejected = claim.status == Claim.STATUS_REJECTED
+            detail_status = ClaimDetail.STATUS_REJECTED if is_rejected else ClaimDetail.STATUS_PASSED
+            detail_rejection_reason = claim.rejection_reason if is_rejected else None
+            detail_qty_approved = Decimal(0) if is_rejected else None
+
             # TODO: Make items/services count configurable instead of random, make it more realistic in TODO:
             for _ in range(random.randint(1, 4)): # 1-4 items per claim
                 price = Decimal(random.uniform(5.0, 150.0)).quantize(Decimal("0.01"))
                 qty = Decimal(random.randint(1, 5))
                 claim_items_to_create.append(ClaimItem(
-                    claim=claim, item=random.choice(self.items), status=1, qty_provided=qty,
+                    claim=claim, item=random.choice(self.items), status=detail_status, qty_provided=qty,
+                    qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
                     price_asked=price, audit_user_id=1, availability=True
                 ))
                 claim_totals[claim.id] += price * qty
-            
+
             for _ in range(random.randint(1, 3)): # 1-3 services per claim
                 price = Decimal(random.uniform(50.0, 500.0)).quantize(Decimal("0.01"))
                 qty = 1
                 claim_services_to_create.append(ClaimService(
-                    claim=claim, service=random.choice(self.services), status=1, qty_provided=qty,
+                    claim=claim, service=random.choice(self.services), status=detail_status, qty_provided=qty,
+                    qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
                     price_asked=price, audit_user_id=1
                 ))
                 claim_totals[claim.id] += price * qty
@@ -278,7 +423,8 @@ class BulkInsureeGenerator:
                        'policies': len(policies), 'insuree_policies': insuree_policies}
 
             if num_claims > 0:
-                claims, items, services = self._generate_claims(all_insurees, num_claims)
+                policy_by_family = {p.family_id: p for p in policies}
+                claims, items, services = self._generate_claims(all_insurees, num_claims, policy_by_family)
                 results.update({'claims': claims, 'claim_items': items, 'claim_services': services})
 
         finally:
