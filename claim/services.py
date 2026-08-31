@@ -668,7 +668,11 @@ def processing_claim(claim, user, is_process=False, validate=True):
                 f"Claim {claim.uuid} is invalid, we deleted its dedrem ({deleted_dedrems})"
             )
     if is_process:
-        errors += set_claim_processed_or_valuated(claim, errors, user)
+        result = set_claim_processed_or_valuated(claim, errors, user)
+        if isinstance(result, Claim):
+            errors += []
+        else:
+            errors += result
     return errors
 
 
@@ -681,6 +685,7 @@ def submit_claim(claim, user):
     return ClaimSubmitService(user).submit_claim(claim, user)[1]
 
 
+@register_service_signal("claim.claim_valuated")
 def set_claim_processed_or_valuated(claim, errors, user):
     try:
         if errors:
@@ -699,7 +704,7 @@ def set_claim_processed_or_valuated(claim, errors, user):
 
             claim.process_stamp = TimeUtils.now()
         claim.save()
-        return []
+        return claim
     except Exception as ex:
         error = {
             "title": claim.code,
