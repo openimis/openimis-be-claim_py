@@ -242,6 +242,7 @@ class ClaimInputType(OpenIMISMutation.Input):
     icd_2_id = graphene.Int(required=False)
     icd_3_id = graphene.Int(required=False)
     icd_4_id = graphene.Int(required=False)
+    program = graphene.Int(required=False)
     review_status = TinyInt(required=False)
     date_claimed = graphene.Date(required=True)
     date_processed = graphene.Date(required=False)
@@ -341,6 +342,12 @@ def update_or_create_claim(data, user):
         data.pop("client_mutation_id")
     if "client_mutation_label" in data:
         data.pop("client_mutation_label")
+    if "program" in data:
+        if CoreConfig.is_program_available:
+            data["program"] = program_models.Program.objects.filter(
+                idProgram=data["program"]).first()
+        else:
+            data.pop("program")
     return service_update_or_create_claim(data, user)
 
 

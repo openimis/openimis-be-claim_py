@@ -5,6 +5,7 @@ from insuree.schema import InsureeGQLType
 from location.schema import HealthFacilityGQLType
 from medical.schema import DiagnosisGQLType
 from claim_batch.schema import BatchRunGQLType
+from program.schema import ProgramGQLType
 from .apps import ClaimConfig
 from claim.models import (
     ClaimDedRem,
@@ -91,6 +92,7 @@ class ClaimGQLType(DjangoObjectType):
             ),
             **prefix_filterset("insuree__", InsureeGQLType._meta.filter_fields),
             **prefix_filterset("batch_run__", BatchRunGQLType._meta.filter_fields),
+            **prefix_filterset("program__", ProgramGQLType._meta.filter_fields)
         }
         connection_class = ExtendedConnection
 
