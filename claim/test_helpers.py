@@ -3,6 +3,7 @@ from core.models.user import ClaimAdmin
 from claim.validations import get_claim_category
 from claim.utils import approved_amount
 from claim.services import claim_create, update_sum_claims
+from claim.test_factories import ClaimItemFactory, ClaimServiceFactory
 from medical.test_helpers import (
     get_item_of_type,
     get_service_of_category,
@@ -106,16 +107,10 @@ def create_test_claimitem(
         custom_props["item"] = item
 
     custom_props_item = {k: v for k, v in custom_props.items() if hasattr(ClaimItem, k)}
-    item = ClaimItem.objects.create(
+    item = ClaimItemFactory(
         **{
             "claim": claim,
-            "qty_provided": 7,
-            "price_asked": 11,
-            "status": 1,
-            "availability": True,
-            "validity_from": "2019-06-01",
             "validity_to": None if valid else "2019-06-01",
-            "audit_user_id": -1,
             **custom_props_item,
         }
     )
@@ -151,15 +146,10 @@ def create_test_claimservice(
     custom_props_service = {
         k: v for k, v in custom_props.items() if hasattr(ClaimService, k)
     }
-    service = ClaimService.objects.create(
+    service = ClaimServiceFactory(
         **{
             "claim": claim,
-            "qty_provided": 7,
-            "price_asked": 11,
-            "status": 1,
-            "validity_from": "2019-06-01",
             "validity_to": None if valid else "2019-06-01",
-            "audit_user_id": -1,
             **custom_props_service,
         }
     )
