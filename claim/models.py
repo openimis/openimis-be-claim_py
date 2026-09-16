@@ -434,6 +434,8 @@ class ClaimDetail:
 
 
 class ClaimItem(core_models.VersionedModel, ClaimDetail, core_models.ExtendableModel):
+    row_scope = core_models.ParentScope("claim")
+
     model_prefix = "item"
     id = models.AutoField(db_column="ClaimItemID", primary_key=True)
     claim = models.ForeignKey(
@@ -607,6 +609,8 @@ class ClaimAttachment(core_models.UUIDModel, core_models.UUIDVersionedModel):
 class ClaimService(
     core_models.VersionedModel, ClaimDetail, core_models.ExtendableModel
 ):
+    row_scope = core_models.ParentScope("claim")
+
     model_prefix = "service"
     id = models.AutoField(db_column="ClaimServiceID", primary_key=True)
     claim = models.ForeignKey(
@@ -724,7 +728,9 @@ class ClaimService(
         db_table = "tblClaimServices"
 
 
-class ClaimServiceItem(models.Model):
+class ClaimServiceItem(core_models.RowSecurityMixin, models.Model):
+    row_scope = core_models.ParentScope("claim_service")
+
     id = models.AutoField(primary_key=True, db_column="idCsi")
     item = models.ForeignKey(
         medical_models.Item,
@@ -754,7 +760,9 @@ class ClaimServiceItem(models.Model):
         db_table = "tblClaimServicesItems"
 
 
-class ClaimServiceService(models.Model):
+class ClaimServiceService(core_models.RowSecurityMixin, models.Model):
+    row_scope = core_models.ParentScope("claim_service")
+
     id = models.AutoField(primary_key=True, db_column="idCss")
     service = models.ForeignKey(
         medical_models.Service,
@@ -785,6 +793,8 @@ class ClaimServiceService(models.Model):
 
 
 class ClaimDedRem(core_models.VersionedModel):
+    row_scope = core_models.ParentScope("policy")
+
     id = models.AutoField(db_column="ExpenditureID", primary_key=True)
 
     policy = models.ForeignKey(
