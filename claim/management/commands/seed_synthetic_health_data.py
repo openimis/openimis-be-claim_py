@@ -148,18 +148,27 @@ class BulkInsureeGenerator:
         if self.stdout: self.stdout.write(message)
         else: print(message)
 
-    def setup_reference_data(self, generate_claims=False):
-        """Cache reference data to avoid repeated DB queries"""
+    def setup_reference_data(self, generate_claims=False, validity=None):
+        """Cache reference data to avoid repeated DB queries.
+
+        `validity` is the date the reference data must be valid at, defaulting to
+        today. <Model>.filter_validity(validity) is the single place where "valid"
+        is defined for VersionedModel, so this stays correct if that definition
+        changes (e.g. migrating from validity_to IS NULL to active=True). Passing
+        a date also excludes rows that are not yet effective, which the no-argument
+        form does not. Superseded or deactivated rows must never be reused for new
+        claims.
+        """
+        validity = validity or date.today()
         self.write("Loading and setting up reference data...")
-        # validity_to__isnull=True selects only currently-valid rows (openIMIS VersionedModel convention):
-        # a non-null validity_to means the row was superseded/deactivated and must not be reused for new claims.
-        self.genders = list(Gender.objects.filter(validity_to__isnull=True)) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
-        self.family_types = list(FamilyType.objects.filter(validity_to__isnull=True)) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
-        self.locations = list(Location.objects.filter(validity_to__isnull=True)[:200])
-        self.health_facilities = list(HealthFacility.objects.filter(validity_to__isnull=True)[:100])
-        self.products = list(Product.objects.filter(validity_to__isnull=True)[:20])
+        # Gender and FamilyType are plain reference tables (not VersionedModel): nothing to filter.
+        self.genders = list(Gender.objects.all()) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
+        self.family_types = list(FamilyType.objects.all()) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
+        self.locations = list(Location.objects.filter(*Location.filter_validity(validity))[:200])
+        self.health_facilities = list(HealthFacility.objects.filter(*HealthFacility.filter_validity(validity))[:100])
+        self.products = list(Product.objects.filter(*Product.filter_validity(validity))[:20])
         # TODO: Should we filter officers by district/region? Currently random assignment
-        self.officers = list(Officer.objects.filter(validity_to__isnull=True)[:50])
+        self.officers = list(Officer.objects.filter(*Officer.filter_validity(validity))[:50])
 
         required_data = {
             "locations": self.locations, "health facilities": self.health_facilities,
@@ -169,9 +178,9 @@ class BulkInsureeGenerator:
             if not data_list: raise CommandError(f"No valid data found for {name}. Please populate reference data.")
 
         if generate_claims:
-            self.diagnoses = list(Diagnosis.objects.filter(validity_to__isnull=True)[:500])
-            self.items = list(Item.objects.filter(validity_to__isnull=True)[:1000])
-            self.services = list(Service.objects.filter(validity_to__isnull=True)[:500])
+            self.diagnoses = list(Diagnosis.objects.filter(*Diagnosis.filter_validity(validity))[:500])
+            self.items = list(Item.objects.filter(*Item.filter_validity(validity))[:1000])
+            self.services = list(Service.objects.filter(*Service.filter_validity(validity))[:500])
             required_claim_data = { "diagnoses": self.diagnoses, "medical items": self.items, "medical services": self.services }
             for name, data_list in required_claim_data.items():
                 if not data_list: raise CommandError(f"To generate claims, please populate valid reference data for {name}.")

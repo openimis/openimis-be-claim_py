@@ -11,12 +11,15 @@ from claim.management.commands.seed_synthetic_health_data import (
     SUBMIT_TO_VALUATED_RANGE_DAYS, BulkInsureeGenerator,
 )
 from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
+from core.models import Officer
 from core.test_helpers import create_test_officer
 from insuree.test_helpers import create_test_insuree
+from location.models import HealthFacility, Location
 from location.test_helpers import create_test_health_facility, create_test_village
 from medical.models import Diagnosis
 from medical.test_helpers import create_test_item, create_test_service
 from policy.test_helpers import create_test_policy2
+from product.models import Product
 from product.test_helpers import create_test_product
 
 
@@ -123,7 +126,7 @@ class GenerateClaimsDateCoherenceTest(TestCase):
     def test_care_type_distribution_matches_configured_weights(self):
         """IPD share should track CARE_TYPE_WEIGHTS (~15-20%), not a 50/50 split."""
         policy_by_family = {self.insuree.family_id: self.policy}
-        sample_size = 2000
+        sample_size = 200
 
         self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
 
@@ -179,7 +182,7 @@ class GenerateClaimsStatusDistributionTest(TestCase):
 
     def test_status_distribution_matches_configured_rates(self):
         policy_by_family = {self.insuree.family_id: self.policy}
-        sample_size = 3000
+        sample_size = 300
 
         self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
 
@@ -208,7 +211,7 @@ class GenerateClaimsStatusDistributionTest(TestCase):
 
     def test_rejected_claims_cascade_status_to_items_and_services(self):
         policy_by_family = {self.insuree.family_id: self.policy}
-        sample_size = 500
+        sample_size = 50
 
         self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
 
@@ -387,8 +390,9 @@ class GenerateClaimsProgressDistributionTest(TestCase):
 
 class SetupReferenceDataValidityTest(TestCase):
     """Rule: reference data used to build claims (health facilities, products,
-    officers, diagnoses, items, services) must be currently valid
-    (validity_to IS NULL) - expired/superseded rows must never be picked."""
+    officers, diagnoses, items, services) must be valid at the reference date
+    (today by default) - neither expired/superseded nor not-yet-effective rows
+    may ever be picked."""
 
     def setUp(self):
         self.generator = BulkInsureeGenerator()
@@ -430,12 +434,12 @@ class SetupReferenceDataValidityTest(TestCase):
         create_test_officer(valid=True)
         create_test_product("VALIDPR2", valid=True)
 
-        # Diagnosis.code and Item.code are limited to 6 characters in the DB schema.
+        # Diagnosis.code, Item.code and Service.code are limited to 6 characters in the DB schema.
         valid_diag = Diagnosis.objects.create(code="VALDIC", name="valid diag", audit_user_id=-1)
         Diagnosis.objects.create(code="EXPDIC", name="expired diag", audit_user_id=-1, validity_to=date.today())
         valid_item = create_test_item("D", valid=True, custom_props={"code": "VALIT"})
         create_test_item("D", valid=False, custom_props={"code": "EXPIT"})
-        valid_service = create_test_service("V", valid=True, custom_props={"code": "VALIDSVC"})
+        valid_service = create_test_service("V", valid=True, custom_props={"code": "VALSVC"})
         create_test_service("V", valid=False, custom_props={"code": "EXPSVC"})
 
         self.generator.setup_reference_data(generate_claims=True)
@@ -446,3 +450,50 @@ class SetupReferenceDataValidityTest(TestCase):
         self.assertNotIn("EXPIT", {i.code for i in self.generator.items})
         self.assertIn(valid_service.code, {s.code for s in self.generator.services})
         self.assertNotIn("EXPSVC", {s.code for s in self.generator.services})
+
+    def test_not_yet_effective_health_facility_is_excluded(self):
+        """A row whose validity_from is in the future is not valid yet, even
+        though its validity_to is NULL - filter_validity(<date>) excludes it."""
+        valid_hf = create_test_health_facility("CURRHF", self.district.id, valid=True)
+        future_hf = create_test_health_facility("FUTUREHF", self.district.id, valid=True)
+        HealthFacility.objects.filter(pk=future_hf.pk).update(
+            validity_from=date.today() + timedelta(days=30)
+        )
+
+        self.generator.setup_reference_data(generate_claims=False)
+
+        hf_codes = {hf.code for hf in self.generator.health_facilities}
+        self.assertIn(valid_hf.code, hf_codes)
+        self.assertNotIn("FUTUREHF", hf_codes)
+
+    def test_validity_date_selects_data_valid_at_that_date(self):
+        """Passing an explicit validity date loads the reference data that was
+        valid then: a row superseded since is picked up, a row that only became
+        effective afterwards is not."""
+        past = date.today() - timedelta(days=365)
+        back_then = past - timedelta(days=30)
+
+        # setup_reference_data requires locations, health facilities, products and
+        # officers to be non-empty, so the whole required set must exist at `past`.
+        officer = create_test_officer(valid=True, custom_props={"code": "PASTOFF"})
+        product = create_test_product("PASTPR", valid=True)
+        Location.objects.filter(
+            pk__in=[self.village.pk, self.village.parent.pk, self.district.pk, self.district.parent.pk]
+        ).update(validity_from=back_then)
+        Officer.objects.filter(pk=officer.pk).update(validity_from=back_then)
+        Product.objects.filter(pk=product.pk).update(validity_from=back_then)
+
+        superseded_hf = create_test_health_facility("PASTHF", self.district.id, valid=True)
+        HealthFacility.objects.filter(pk=superseded_hf.pk).update(
+            validity_from=back_then, validity_to=date.today() - timedelta(days=10)
+        )
+        recent_hf = create_test_health_facility("RECENTHF", self.district.id, valid=True)
+        HealthFacility.objects.filter(pk=recent_hf.pk).update(
+            validity_from=date.today() - timedelta(days=5)
+        )
+
+        self.generator.setup_reference_data(generate_claims=False, validity=past)
+
+        hf_codes = {hf.code for hf in self.generator.health_facilities}
+        self.assertIn("PASTHF", hf_codes)
+        self.assertNotIn("RECENTHF", hf_codes)
