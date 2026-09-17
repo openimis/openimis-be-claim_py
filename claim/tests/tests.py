@@ -840,7 +840,7 @@ class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):
             with mock.patch("claim.services.processing_claim", return_value=[]), \
                  mock.patch.object(SubmitClaimsMutation, "add_submission_stats_to_mutation_log"):
                 SubmitClaimsMutation.async_mutate(
-                    SubmitClaimsMutation, limited_user, uuids=[str(claim_allowed.uuid)]
+                    user=limited_user, uuids=[str(claim_allowed.uuid)]
                 )
             claim_allowed.refresh_from_db()
 
