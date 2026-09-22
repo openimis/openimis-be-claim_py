@@ -153,8 +153,8 @@ class BulkInsureeGenerator:
         self.write("Loading and setting up reference data...")
         # validity_to__isnull=True selects only currently-valid rows (openIMIS VersionedModel convention):
         # a non-null validity_to means the row was superseded/deactivated and must not be reused for new claims.
-        self.genders = list(Gender.objects.filter(validity_to__isnull=True)) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
-        self.family_types = list(FamilyType.objects.filter(validity_to__isnull=True)) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
+        self.genders = list(Gender.objects.filter(code__isnull=False)) or list(Gender.objects.bulk_create([Gender(code='M'), Gender(code='F')]))
+        self.family_types = list(FamilyType.objects.filter(code__isnull=False)) or list(FamilyType.objects.bulk_create([FamilyType(code='N', type='Nuclear')]))
         self.locations = list(Location.objects.filter(validity_to__isnull=True)[:200])
         self.health_facilities = list(HealthFacility.objects.filter(validity_to__isnull=True)[:100])
         self.products = list(Product.objects.filter(validity_to__isnull=True)[:20])
