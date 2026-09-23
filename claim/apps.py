@@ -1,28 +1,95 @@
 from django.apps import AppConfig
 
+from core.rights_declaration import RightsDeclaration
+
 MODULE_NAME = "claim"
+
+# Droits, par entite puis par action, chaque action portant le couple
+# `(nom de permission django, droit openIMIS numerique)`. Meme structure que
+# `core.apps.DJANGO_PERMS` : les identifiants vivent a un seul endroit et la
+# hierarchie rend le partage visible.
+#
+# Deux noms pour une action parce que `RoleRight.right_id` est un IntegerField et que
+# `InteractiveUser.rights_str` compare a `str(int)` : c'est **l'entier qui est
+# applique** aujourd'hui, le nom django etant declare a cote, pret pour le jour ou les
+# permissions passeront aux tables de django.
+#
+# `query` / `create` / `update` / `delete` correspondent aux permissions de modele que
+# django cree au post_migrate. Le reste sont des actions metier, qui ne deviendront des
+# lignes django grantables qu'une fois declarees dans `Meta.permissions`.
+#
+# Plusieurs actions partagent deliberement 111010, le droit "modifier une reclamation" :
+# selectionner, contourner ou passer une revue ou un retour est une modification de la
+# reclamation, pas une action a droit propre. C'est le catalogue openIMIS qui le veut
+# ainsi (claim.select_claim_review, claim.skip_claim_feedback... tous a 111010), et le
+# laisser visible ici evite qu'on croie a un copier-coller.
+DJANGO_PERMS = {
+    "claim": {
+        "query": ("claim.view_claim", 111001),
+        "create": ("claim.add_claim", 111002),
+        "update": ("claim.change_claim", 111010),
+        "delete": ("claim.delete_claim", 111004),
+        "load": ("claim.load_claim", 111005),
+        "submit": ("claim.submit_claim", 111007),
+        "process": ("claim.process_claim", 111011),
+        "restore": ("claim.restore_claim", 111012),
+        "print": ("claim.print_claim", 111006),
+        # Retours et revues : les "deliver" ont leur propre droit, les autres sont des
+        # modifications de la reclamation (111010).
+        "selectFeedback": ("claim.select_claim_feedback", 111010),
+        "bypassFeedback": ("claim.bypass_claim_feedback", 111010),
+        "skipFeedback": ("claim.skip_claim_feedback", 111010),
+        "deliverFeedback": ("claim.deliver_claim_feedback", 111009),
+        "selectReview": ("claim.select_claim_review", 111010),
+        "bypassReview": ("claim.bypass_claim_review", 111010),
+        "skipReview": ("claim.skip_claim_review", 111010),
+        "deliverReview": ("claim.deliver_claim_review", 111008),
+    },
+    # Les agents de saisie lus depuis l'ecran des reclamations. Alias du droit de
+    # lecture des reclamations : cette requete etait a [], donc ouverte a tous.
+    "claimOfficer": {
+        "query": ("claim.view_claim_officer", 111001),
+    },
+}
+
+
+
+
+
+_PERM_CFG = {
+    "gql_query_claims_perms": ("claim", "query"),
+    "gql_query_claim_officers_perms": ("claimOfficer", "query"),
+    "gql_mutation_create_claims_perms": ("claim", "create"),
+    "gql_mutation_update_claims_perms": ("claim", "update"),
+    "gql_mutation_load_claims_perms": ("claim", "load"),
+    "gql_mutation_submit_claims_perms": ("claim", "submit"),
+    "gql_mutation_select_claim_feedback_perms": ("claim", "selectFeedback"),
+    "gql_mutation_bypass_claim_feedback_perms": ("claim", "bypassFeedback"),
+    "gql_mutation_skip_claim_feedback_perms": ("claim", "skipFeedback"),
+    "gql_mutation_deliver_claim_feedback_perms": ("claim", "deliverFeedback"),
+    "gql_mutation_select_claim_review_perms": ("claim", "selectReview"),
+    "gql_mutation_bypass_claim_review_perms": ("claim", "bypassReview"),
+    "gql_mutation_skip_claim_review_perms": ("claim", "skipReview"),
+    "gql_mutation_deliver_claim_review_perms": ("claim", "deliverReview"),
+    "gql_mutation_process_claims_perms": ("claim", "process"),
+    "gql_mutation_restore_claims_perms": ("claim", "restore"),
+    "gql_mutation_delete_claims_perms": ("claim", "delete"),
+    "claim_print_perms": ("claim", "print"),
+}
+
+
+
+
+RIGHTS = RightsDeclaration(MODULE_NAME, DJANGO_PERMS, _PERM_CFG)
+
+perms = RIGHTS.perms
+django_perms = RIGHTS.django_perm_names
+configured_perms = RIGHTS.configured
+require = RIGHTS.require
 
 DEFAULT_CFG = {
     "default_validations_disabled": False,
-    "gql_query_claims_perms": ["111001"],
-    "gql_query_claim_officers_perms": [],
     "gql_query_claim_diagnosis_variance_only_on_existing": True,
-    "gql_mutation_create_claims_perms": ["111002"],
-    "gql_mutation_update_claims_perms": ["111010"],
-    "gql_mutation_load_claims_perms": ["111005"],
-    "gql_mutation_submit_claims_perms": ["111007"],
-    "gql_mutation_select_claim_feedback_perms": ["111010"],
-    "gql_mutation_bypass_claim_feedback_perms": ["111010"],
-    "gql_mutation_skip_claim_feedback_perms": ["111010"],
-    "gql_mutation_deliver_claim_feedback_perms": ["111009"],
-    "gql_mutation_select_claim_review_perms": ["111010"],
-    "gql_mutation_bypass_claim_review_perms": ["111010"],
-    "gql_mutation_skip_claim_review_perms": ["111010"],
-    "gql_mutation_deliver_claim_review_perms": ["111008"],
-    "gql_mutation_process_claims_perms": ["111011"],
-    "gql_mutation_restore_claims_perms": ["111012"],
-    "gql_mutation_delete_claims_perms": ["111004"],
-    "claim_print_perms": ["111006"],
     "claim_attachments_root_path": None,
     "claim_uspUpdateClaimFromPhone_intermediate_sets": 2,
     "autogenerated_claim_code_config": {"code_length": 8},
@@ -40,26 +107,27 @@ class ClaimConfig(AppConfig):
     name = MODULE_NAME
 
     default_validations_disabled = None
-    gql_query_claims_perms = []
-
-    gql_query_claim_officers_perms = []
+    # Droits: constantes issues de DJANGO_PERMS, plus surchargeables. Ils ne
+    # passent plus par le DEFAULT_CFG ni par ready().
+    gql_query_claims_perms = RIGHTS.perms("claim", "query")
+    gql_query_claim_officers_perms = RIGHTS.perms("claimOfficer", "query")
     gql_query_claim_diagnosis_variance_only_on_existing = None
-    gql_mutation_create_claims_perms = []
-    gql_mutation_update_claims_perms = []
-    gql_mutation_load_claims_perms = []
-    gql_mutation_submit_claims_perms = []
-    gql_mutation_select_claim_feedback_perms = []
-    gql_mutation_bypass_claim_feedback_perms = []
-    gql_mutation_skip_claim_feedback_perms = []
-    gql_mutation_deliver_claim_feedback_perms = []
-    gql_mutation_select_claim_review_perms = []
-    gql_mutation_bypass_claim_review_perms = []
-    gql_mutation_skip_claim_review_perms = []
-    gql_mutation_deliver_claim_review_perms = []
-    gql_mutation_process_claims_perms = []
-    gql_mutation_restore_claims_perms = []
-    gql_mutation_delete_claims_perms = []
-    claim_print_perms = []
+    gql_mutation_create_claims_perms = RIGHTS.perms("claim", "create")
+    gql_mutation_update_claims_perms = RIGHTS.perms("claim", "update")
+    gql_mutation_load_claims_perms = RIGHTS.perms("claim", "load")
+    gql_mutation_submit_claims_perms = RIGHTS.perms("claim", "submit")
+    gql_mutation_select_claim_feedback_perms = RIGHTS.perms("claim", "selectFeedback")
+    gql_mutation_bypass_claim_feedback_perms = RIGHTS.perms("claim", "bypassFeedback")
+    gql_mutation_skip_claim_feedback_perms = RIGHTS.perms("claim", "skipFeedback")
+    gql_mutation_deliver_claim_feedback_perms = RIGHTS.perms("claim", "deliverFeedback")
+    gql_mutation_select_claim_review_perms = RIGHTS.perms("claim", "selectReview")
+    gql_mutation_bypass_claim_review_perms = RIGHTS.perms("claim", "bypassReview")
+    gql_mutation_skip_claim_review_perms = RIGHTS.perms("claim", "skipReview")
+    gql_mutation_deliver_claim_review_perms = RIGHTS.perms("claim", "deliverReview")
+    gql_mutation_process_claims_perms = RIGHTS.perms("claim", "process")
+    gql_mutation_restore_claims_perms = RIGHTS.perms("claim", "restore")
+    gql_mutation_delete_claims_perms = RIGHTS.perms("claim", "delete")
+    claim_print_perms = RIGHTS.perms("claim", "print")
     claim_attachments_root_path = None
     claim_uspUpdateClaimFromPhone_intermediate_sets = None
     autogenerated_claim_code_config = {}

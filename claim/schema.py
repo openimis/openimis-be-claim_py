@@ -2,6 +2,7 @@ import graphene
 from enum import Enum
 import logging
 from core.models import Officer, MutationLog
+from insuree.apps import InsureeConfig
 from insuree.models import Insuree
 from .services import check_unique_claim_code
 from core.schema import (
@@ -109,10 +110,17 @@ class Query(graphene.ObjectType):
     )
 
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
+        # A nationwide lookup: it queries Insuree by CHFID with no location filter, so
+        # any CHFID resolves to that insuree's name wherever they live. That is a
+        # deliberate escape from the caller's district scope, and it now takes the
+        # right that names it. It used to be reachable with "create claim" or "update
+        # claim", which are about claims, not about reading the whole insuree
+        # register - so every claim clerk had it by default.
+        #
+        # The right is InsureeConfig's, not ClaimConfig's: the data exposed is insuree
+        # data, and this resolver is only one of the places that could ask for it.
         if not info.context.user.has_perms(
-            ClaimConfig.gql_mutation_create_claims_perms
-        ) and not info.context.user.has_perms(
-            ClaimConfig.gql_mutation_update_claims_perms
+            InsureeConfig.gql_query_national_insuree_perms
         ):
             raise PermissionDenied(_("unauthorized"))
         chf_id = kwargs.get("chfId")
@@ -228,6 +236,16 @@ class Query(graphene.ObjectType):
         return gql_optimizer.query(query, info)
 
     def resolve_claim_attachments(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+
+    # `claimAttachmentType` n'avait ni resolver ni `get_queryset` sur son type : le
+    # champ etait expose sans aucune verification, y compris a un appelant anonyme.
+    # Referentiel (types de pieces jointes), donc impact faible, mais c'est une
+    # absence totale de controle sur un point d'entree. Meme droit et meme forme que
+    # `resolve_claim_attachments` juste au-dessus - renvoyer `None` laisse graphene
+    # utiliser le manager par defaut, donc seul le controle est ajoute.
+    def resolve_claim_attachment_type(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 

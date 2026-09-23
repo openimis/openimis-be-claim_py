@@ -73,6 +73,26 @@ signal_claim_rejection = dispatch.Signal(["claim"])
 
 
 class Claim(core_models.VersionedModel, core_models.ExtendableModel):
+    @classmethod
+    def get_rights(cls, action):
+        """
+        Les droits regissant une action sur une reclamation, pour GraphQL, REST et FHIR.
+
+        Ne redeclare rien : la table des droits est `claim.apps.DJANGO_PERMS`, par
+        entite puis par action, et `configured_perms` y lit la valeur *configuree* -
+        celle que ModuleConfiguration a pu surcharger - et non le defaut declare. Ce
+        modele n'est que le point d'acces, comme `get_queryset` l'est pour les lignes.
+
+        Toutes les actions de l'entite sont donc disponibles, pas seulement les quatre
+        canoniques : "submit", "process", "deliverReview"... La ou le controle reel
+        d'une API est veritablement plus large - le POST FHIR accepte create OU submit,
+        parce que son serializer le fait - cela appartient a la classe de permissions de
+        cette API, documente, et non ici.
+        """
+        from claim.apps import configured_perms
+
+        return configured_perms("claim", action)
+
     id = models.AutoField(db_column="ClaimID", primary_key=True)
     uuid = models.CharField(
         db_column="ClaimUUID", max_length=36, default=uuid.uuid4, unique=True
