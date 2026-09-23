@@ -76,18 +76,19 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     @classmethod
     def get_rights(cls, action):
         """
-        Les droits regissant une action sur une reclamation, pour GraphQL, REST et FHIR.
+        The rights governing an action on a claim, for GraphQL, REST and FHIR.
 
-        Ne redeclare rien : la table des droits est `claim.apps.DJANGO_PERMS`, par
-        entite puis par action, et `configured_perms` y lit la valeur *configuree* -
-        celle que ModuleConfiguration a pu surcharger - et non le defaut declare. Ce
-        modele n'est que le point d'acces, comme `get_queryset` l'est pour les lignes.
+        Redeclares nothing: the rights table is `claim.apps.DJANGO_PERMS`, by entity
+        then by action, and `configured_perms` reads the *configured* value there -
+        the one ModuleConfiguration may have overridden - and not the declared
+        default. This model is only the access point, as `get_queryset` is for the
+        rows.
 
-        Toutes les actions de l'entite sont donc disponibles, pas seulement les quatre
-        canoniques : "submit", "process", "deliverReview"... La ou le controle reel
-        d'une API est veritablement plus large - le POST FHIR accepte create OU submit,
-        parce que son serializer le fait - cela appartient a la classe de permissions de
-        cette API, documente, et non ici.
+        Every action of the entity is therefore available, not only the four canonical
+        ones: "submit", "process", "deliverReview"... Where an API's real check is
+        genuinely broader - the FHIR POST accepts create OR submit, because its
+        serializer does - that belongs in that API's permission class, documented,
+        and not here.
         """
         from claim.apps import configured_perms
 

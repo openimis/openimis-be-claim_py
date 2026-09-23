@@ -239,12 +239,12 @@ class Query(graphene.ObjectType):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
-    # `claimAttachmentType` n'avait ni resolver ni `get_queryset` sur son type : le
-    # champ etait expose sans aucune verification, y compris a un appelant anonyme.
-    # Referentiel (types de pieces jointes), donc impact faible, mais c'est une
-    # absence totale de controle sur un point d'entree. Meme droit et meme forme que
-    # `resolve_claim_attachments` juste au-dessus - renvoyer `None` laisse graphene
-    # utiliser le manager par defaut, donc seul le controle est ajoute.
+    # `claimAttachmentType` had neither a resolver nor a `get_queryset` on its type:
+    # the field was exposed with no verification at all, including to an anonymous
+    # caller. Reference data (attachment types), so the impact is low, but it is a
+    # complete absence of any check on an entry point. Same right and same shape as
+    # `resolve_claim_attachments` just above - returning `None` lets graphene use the
+    # default manager, so only the check is added.
     def resolve_claim_attachment_type(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))

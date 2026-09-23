@@ -4,25 +4,25 @@ from core.rights_declaration import RightsDeclaration
 
 MODULE_NAME = "claim"
 
-# Droits, par entite puis par action, chaque action portant le couple
-# `(nom de permission django, droit openIMIS numerique)`. Meme structure que
-# `core.apps.DJANGO_PERMS` : les identifiants vivent a un seul endroit et la
-# hierarchie rend le partage visible.
+# Rights, by entity then by action, each action carrying the pair
+# `(django permission name, numeric openIMIS right)`. Same structure as
+# `core.apps.DJANGO_PERMS`: the identifiers live in one place only, and the hierarchy
+# makes sharing visible.
 #
-# Deux noms pour une action parce que `RoleRight.right_id` est un IntegerField et que
-# `InteractiveUser.rights_str` compare a `str(int)` : c'est **l'entier qui est
-# applique** aujourd'hui, le nom django etant declare a cote, pret pour le jour ou les
-# permissions passeront aux tables de django.
+# Two names for one action because `RoleRight.right_id` is an IntegerField and
+# `InteractiveUser.rights_str` compares against `str(int)`: it is **the integer that is
+# enforced** today, the django name being declared alongside, ready for the day the
+# permissions move to django's own tables.
 #
-# `query` / `create` / `update` / `delete` correspondent aux permissions de modele que
-# django cree au post_migrate. Le reste sont des actions metier, qui ne deviendront des
-# lignes django grantables qu'une fois declarees dans `Meta.permissions`.
+# `query` / `create` / `update` / `delete` correspond to the model permissions django
+# creates at post_migrate. The rest are business actions, which will only become
+# grantable django rows once declared in `Meta.permissions`.
 #
-# Plusieurs actions partagent deliberement 111010, le droit "modifier une reclamation" :
-# selectionner, contourner ou passer une revue ou un retour est une modification de la
-# reclamation, pas une action a droit propre. C'est le catalogue openIMIS qui le veut
-# ainsi (claim.select_claim_review, claim.skip_claim_feedback... tous a 111010), et le
-# laisser visible ici evite qu'on croie a un copier-coller.
+# Several actions deliberately share 111010, the "modify a claim" right: selecting,
+# bypassing or skipping a review or a feedback is a modification of the claim, not an
+# action with a right of its own. That is what the openIMIS catalogue wants
+# (claim.select_claim_review, claim.skip_claim_feedback... all at 111010), and leaving
+# it visible here keeps anyone from reading it as a copy-paste.
 DJANGO_PERMS = {
     "claim": {
         "query": ("claim.view_claim", 111001),
@@ -34,8 +34,8 @@ DJANGO_PERMS = {
         "process": ("claim.process_claim", 111011),
         "restore": ("claim.restore_claim", 111012),
         "print": ("claim.print_claim", 111006),
-        # Retours et revues : les "deliver" ont leur propre droit, les autres sont des
-        # modifications de la reclamation (111010).
+        # Feedback and reviews: the "deliver" ones have their own right, the others
+        # are modifications of the claim (111010).
         "selectFeedback": ("claim.select_claim_feedback", 111010),
         "bypassFeedback": ("claim.bypass_claim_feedback", 111010),
         "skipFeedback": ("claim.skip_claim_feedback", 111010),
@@ -45,8 +45,8 @@ DJANGO_PERMS = {
         "skipReview": ("claim.skip_claim_review", 111010),
         "deliverReview": ("claim.deliver_claim_review", 111008),
     },
-    # Les agents de saisie lus depuis l'ecran des reclamations. Alias du droit de
-    # lecture des reclamations : cette requete etait a [], donc ouverte a tous.
+    # The enrolment officers read from the claims screen. An alias of the claim read
+    # right: this query was at [], and so was open to everybody.
     "claimOfficer": {
         "query": ("claim.view_claim_officer", 111001),
     },

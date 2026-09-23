@@ -1,18 +1,18 @@
 """
-Garde-fous sur la declaration des droits de claim.
+Guard rails on claim's rights declaration.
 
-Meme structure que `core` : `DJANGO_PERMS` par entite puis par action, `_PERM_CFG` qui
-en derive les cles de config, et `Claim.get_rights` qui n'est qu'un point d'acces.
-L'interet de cette forme sur une liste a plat est que le partage d'identifiant devient
-visible : 111010 apparait une fois comme "update" et se retrouve nomme sur chaque action
-qui est, de fait, une modification de la reclamation.
+Same structure as `core`: `DJANGO_PERMS` by entity then by action, `_PERM_CFG`
+deriving the config keys from it, and `Claim.get_rights` which is only an access
+point. What this shape gains over a flat list is that identifier sharing becomes
+visible: 111010 appears once as "update" and turns up named on every action that is,
+in fact, a modification of the claim.
 
-Ce qui est verrouille ici, c'est le couple entite/action, pas seulement les valeurs :
-  * un identifiant a un seul endroit (DJANGO_PERMS), donc pas de derive entre le
-    DEFAULT_CFG et le controle ;
-  * une cle de config sans attribut de classe n'est jamais chargee par `__load_config`
-    et sa lecture leve AttributeError - le droit devient inapplicable ;
-  * `has_perms([])` renvoie True, donc une liste vide accorde a tous.
+What is locked down here is the entity/action pair, not only the values:
+  * an identifier in one place only (DJANGO_PERMS), hence no drift between the
+    DEFAULT_CFG and the check;
+  * a config key with no class attribute is never loaded by `__load_config` and
+    reading it raises AttributeError - the right becomes unenforceable;
+  * `has_perms([])` returns True, so an empty list grants to everybody.
 """
 
 from django.test import TestCase
@@ -50,7 +50,7 @@ EXPECTED_RIGHTS = {
     "claim_print_perms": ["111006"],
 }
 
-# Actions qui partagent volontairement le droit d'une autre.
+# Actions that deliberately share another action's right.
 INTENTIONALLY_SHARED = {
     ("claim", "selectFeedback"): ("claim", "update"),
     ("claim", "bypassFeedback"): ("claim", "update"),
@@ -107,11 +107,11 @@ class ClaimPermissionDeclarationTestCase(TestCase):
                     target = INTENTIONALLY_SHARED.get(holder)
                     self.assertTrue(
                         target is None or target in holders,
-                        f"{holder} partage le droit {right_id} sans que ce soit prevu",
+                        f"{holder} shares right {right_id} without that being intended",
                     )
 
     def test_django_permission_names_are_unique(self):
-        """Meme les actions qui partagent un identifiant gardent un nom django distinct."""
+        """Even the actions sharing an identifier keep a distinct django name."""
         seen = {}
         for entity, actions in DJANGO_PERMS.items():
             for action, (name, _) in actions.items():
