@@ -27,8 +27,8 @@ from claim.apps import (
 )
 from claim.models import Claim
 
-# Les identifiants tels que deployes. En changer un est incompatible avec les roles
-# existants : il faut mettre ce test a jour *et* accorder le nouveau droit.
+# The identifiers as deployed. Changing one is incompatible with the existing roles:
+# this test has to be updated *and* the new right granted.
 EXPECTED_RIGHTS = {
     "gql_query_claims_perms": ["111001"],
     "gql_query_claim_officers_perms": ["111001"],
@@ -77,7 +77,7 @@ class ClaimPermissionDeclarationTestCase(TestCase):
         self.assertEqual(set(_PERM_CFG.values()), declared)
 
     def test_perm_cfg_matches_config_attributes(self):
-        """`__load_config` ignore les cles sans attribut de classe."""
+        """`__load_config` ignores the keys with no class attribute."""
         missing = [key for key in _PERM_CFG if not hasattr(ClaimConfig, key)]
         self.assertEqual(missing, [])
 
@@ -87,8 +87,8 @@ class ClaimPermissionDeclarationTestCase(TestCase):
 
     def test_attributes_carry_the_declared_right(self):
         """
-        Les droits sont des constantes posées depuis DJANGO_PERMS : l'attribut doit
-        valoir la déclaration, sans passer par la config.
+        The rights are constants set from DJANGO_PERMS: the attribute must equal the
+        declaration, without going through the config.
         """
         for key, (entity, action) in _PERM_CFG.items():
             with self.subTest(key=key):
@@ -127,7 +127,7 @@ class ClaimPermissionDeclarationTestCase(TestCase):
         with self.assertRaises(KeyError):
             django_perms("claim", "nosuchaction")
 
-    # --- le point d'acces par le modele -----------------------------------
+    # --- the access point through the model -------------------------------
     def test_model_exposes_every_action_of_its_entity(self):
         for action in DJANGO_PERMS["claim"]:
             with self.subTest(action=action):
@@ -137,13 +137,13 @@ class ClaimPermissionDeclarationTestCase(TestCase):
                 self.assertTrue(Claim.get_rights(action))
 
     def test_model_returns_none_for_an_undeclared_action(self):
-        """None signifie "aucune regle" : l'appelant doit echouer ferme."""
+        """None means "no rule": the caller must fail closed."""
         self.assertIsNone(Claim.get_rights("nosuchaction"))
 
     def test_model_reads_the_configured_value_not_the_declared_default(self):
         """
-        ModuleConfiguration peut surcharger un droit ; le controle doit lire la valeur
-        configuree, la ou `perms()` renvoie le defaut declare.
+        ModuleConfiguration may override a right; the check must read the configured
+        value, where `perms()` returns the declared default.
         """
         original = ClaimConfig.gql_query_claims_perms
         try:

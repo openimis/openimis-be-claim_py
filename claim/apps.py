@@ -107,8 +107,8 @@ class ClaimConfig(AppConfig):
     name = MODULE_NAME
 
     default_validations_disabled = None
-    # Droits: constantes issues de DJANGO_PERMS, plus surchargeables. Ils ne
-    # passent plus par le DEFAULT_CFG ni par ready().
+    # Rights: constants derived from DJANGO_PERMS, no longer overridable. They go
+    # neither through DEFAULT_CFG nor through ready().
     gql_query_claims_perms = RIGHTS.perms("claim", "query")
     gql_query_claim_officers_perms = RIGHTS.perms("claimOfficer", "query")
     gql_query_claim_diagnosis_variance_only_on_existing = None
