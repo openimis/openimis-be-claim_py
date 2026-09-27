@@ -184,11 +184,15 @@ class ValidationTest(TestCase):
 
     def test_validate_pricelist_hf1(self):
         # When the claimitem points to a pricelist that doesn't correspond to the claim HF
-        hf_without_pricelist = create_test_health_facility(code="HF_NP")
-        hf_without_pricelist.items_pricelist = None
-        hf_without_pricelist.services_pricelist = None
-        self.assertIsNotNone(
-            hf_without_pricelist,
+        # The price lists have to be cleared through the helper: assigning them
+        # on the instance afterwards left the database rows untouched, so an
+        # HF_NP left over from an earlier run kept whatever price lists it had.
+        hf_without_pricelist = create_test_health_facility(
+            code="HF_NP",
+            custom_props={"items_pricelist": None, "services_pricelist": None},
+        )
+        self.assertIsNone(
+            hf_without_pricelist.items_pricelist,
             "This test requires a health facility without a price list item",
         )
         # Given
@@ -197,9 +201,18 @@ class ValidationTest(TestCase):
             {"health_facility_id": hf_without_pricelist.id}, product=self.product
         )
 
-        service1 = create_test_claimservice(claim, "S", custom_props={})
+        # Name the item and service explicitly. Left to choose, the helpers fall
+        # back to get_service_of_category/get_item_of_type, which return an
+        # arbitrary existing row -- under --keepdb, a leftover whose
+        # validity_from is later than this claim's target date, which is
+        # rejected for its date (code 9) before the price list is ever checked.
+        service1 = create_test_claimservice(
+            claim, "S", custom_props={"service": create_test_service("S")}
+        )
 
-        item1 = create_test_claimitem(claim, "D", True, custom_props={})
+        item1 = create_test_claimitem(
+            claim, "D", True, custom_props={"item": self.item_1}
+        )
         # When
         errors = validate_claim(claim, True)
         # Then

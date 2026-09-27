@@ -1133,6 +1133,10 @@ template = """
 """
 
 # TODO transform the SQL query into a Django ORM query
+# uvwLocations types DistrictId as text (its National/Region branches select
+# NULL::text), so comparing it to the integer district_id is an undefined
+# operator on PostgreSQL -- hence the explicit ::int. The column only ever
+# holds a location id or NULL, and NULL is covered by the IS NULL clause.
 percentage_referrals_sql = """
 SELECT CONCAT(HF."HFCode", ' - ', HF."HFName") HF, TotalClaim.TotalClaims, RefOP.TotalOP, RefIP.TotalIP
 FROM (SELECT HF."HfID", HF."HFCode", HF."HFName"
@@ -1141,7 +1145,7 @@ FROM (SELECT HF."HfID", HF."HFCode", HF."HFName"
       WHERE HF."ValidityTo" Is NULL
         AND HF."HFLevel" IN ('D', 'C')
         AND (L."RegionId" = %(region_id)s OR %(region_id)s = 0 OR L."LocationId" IS NULL)
-        AND (L."DistrictId" = %(district_id)s OR %(district_id)s = 0 OR L."DistrictId" IS NULL)
+        AND (L."DistrictId"::int = %(district_id)s OR %(district_id)s = 0 OR L."DistrictId" IS NULL)
       ) HF
          LEFT OUTER JOIN (SELECT COUNT(1) TotalClaims, "HFID"
                           FROM "tblClaim"
@@ -1160,7 +1164,7 @@ FROM (SELECT HF."HfID", HF."HFCode", HF."HFName"
                             AND HF."HfID" <> I."HFID"
                             AND C."VisitType" = N'R'
                             AND (L."RegionId" = %(region_id)s OR %(region_id)s = 0 OR L."LocationId" IS NULL)
-                            AND (L."DistrictId" = %(district_id)s OR %(district_id)s = 0 OR L."DistrictId" IS NULL)
+                            AND (L."DistrictId"::int = %(district_id)s OR %(district_id)s = 0 OR L."DistrictId" IS NULL)
                             AND C."DateClaimed" BETWEEN %(date_start)s AND %(date_end)s
                           GROUP BY I."HFID") RefOP ON HF."HfID" = RefOP."HFID"
          LEFT OUTER JOIN (SELECT I."HFID", COUNT(C."ClaimID") TotalIP
@@ -1175,7 +1179,7 @@ FROM (SELECT HF."HfID", HF."HFCode", HF."HFName"
                             AND HF."HfID" <> I."HFID"
                             AND C."VisitType" = N'R'
                             AND (L."RegionId" = %(region_id)s OR %(region_id)s = 0 OR L."LocationId" IS NULL)
-                            AND (L."DistrictId" = %(district_id)s OR %(district_id)s = 0 OR L."DistrictId" IS NULL)
+                            AND (L."DistrictId"::int = %(district_id)s OR %(district_id)s = 0 OR L."DistrictId" IS NULL)
                             AND C."DateClaimed" BETWEEN %(date_start)s AND %(date_end)s
                           GROUP BY I."HFID") RefIP ON HF."HfID" = RefIP."HFID"
 """

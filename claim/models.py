@@ -73,6 +73,27 @@ signal_claim_rejection = dispatch.Signal(["claim"])
 
 
 class Claim(core_models.VersionedModel, core_models.ExtendableModel):
+    @classmethod
+    def get_rights(cls, action):
+        """
+        The rights governing an action on a claim, for GraphQL, REST and FHIR.
+
+        Redeclares nothing: the rights table is `claim.apps.DJANGO_PERMS`, by entity
+        then by action, and `configured_perms` reads the *configured* value there -
+        the one ModuleConfiguration may have overridden - and not the declared
+        default. This model is only the access point, as `get_queryset` is for the
+        rows.
+
+        Every action of the entity is therefore available, not only the four canonical
+        ones: "submit", "process", "deliverReview"... Where an API's real check is
+        genuinely broader - the FHIR POST accepts create OR submit, because its
+        serializer does - that belongs in that API's permission class, documented,
+        and not here.
+        """
+        from claim.apps import configured_perms
+
+        return configured_perms("claim", action)
+
     id = models.AutoField(db_column="ClaimID", primary_key=True)
     uuid = models.CharField(
         db_column="ClaimUUID", max_length=36, default=uuid.uuid4, unique=True
@@ -434,6 +455,8 @@ class ClaimDetail:
 
 
 class ClaimItem(core_models.VersionedModel, ClaimDetail, core_models.ExtendableModel):
+    row_scope = core_models.ParentScope("claim")
+
     model_prefix = "item"
     id = models.AutoField(db_column="ClaimItemID", primary_key=True)
     claim = models.ForeignKey(
@@ -607,6 +630,8 @@ class ClaimAttachment(core_models.UUIDModel, core_models.UUIDVersionedModel):
 class ClaimService(
     core_models.VersionedModel, ClaimDetail, core_models.ExtendableModel
 ):
+    row_scope = core_models.ParentScope("claim")
+
     model_prefix = "service"
     id = models.AutoField(db_column="ClaimServiceID", primary_key=True)
     claim = models.ForeignKey(
@@ -724,7 +749,9 @@ class ClaimService(
         db_table = "tblClaimServices"
 
 
-class ClaimServiceItem(models.Model):
+class ClaimServiceItem(core_models.RowSecurityMixin, models.Model):
+    row_scope = core_models.ParentScope("claim_service")
+
     id = models.AutoField(primary_key=True, db_column="idCsi")
     item = models.ForeignKey(
         medical_models.Item,
@@ -754,7 +781,9 @@ class ClaimServiceItem(models.Model):
         db_table = "tblClaimServicesItems"
 
 
-class ClaimServiceService(models.Model):
+class ClaimServiceService(core_models.RowSecurityMixin, models.Model):
+    row_scope = core_models.ParentScope("claim_service")
+
     id = models.AutoField(primary_key=True, db_column="idCss")
     service = models.ForeignKey(
         medical_models.Service,
@@ -785,6 +814,8 @@ class ClaimServiceService(models.Model):
 
 
 class ClaimDedRem(core_models.VersionedModel):
+    row_scope = core_models.ParentScope("policy")
+
     id = models.AutoField(db_column="ExpenditureID", primary_key=True)
 
     policy = models.ForeignKey(

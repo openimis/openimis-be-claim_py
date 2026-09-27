@@ -20,9 +20,10 @@ from claim.models import (
 from django.utils.translation import gettext as _
 from django.core.exceptions import PermissionDenied
 from core.schema import ClaimAdminGQLType
+from core.gql import ScopedQuerysetMixin
 
 
-class ClaimDedRemGQLType(DjangoObjectType):
+class ClaimDedRemGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Details about Claim demands and remunerated amounts
     """
@@ -170,7 +171,7 @@ class FeedbackGQLType(DjangoObjectType):
         model = Feedback
 
 
-class ClaimItemGQLType(DjangoObjectType):
+class ClaimItemGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the items within a specific Claim
     """
@@ -179,7 +180,7 @@ class ClaimItemGQLType(DjangoObjectType):
         model = ClaimItem
 
 
-class ClaimServiceGQLType(DjangoObjectType):
+class ClaimServiceGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the services within a specific Claim
     """
@@ -188,7 +189,7 @@ class ClaimServiceGQLType(DjangoObjectType):
         model = ClaimService
 
 
-class ClaimServiceServiceGQLType(DjangoObjectType):
+class ClaimServiceServiceGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the Claim services within a specific Claim
     """
@@ -197,7 +198,7 @@ class ClaimServiceServiceGQLType(DjangoObjectType):
         model = ClaimServiceService
 
 
-class ClaimServiceItemGQLType(DjangoObjectType):
+class ClaimServiceItemGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the Claim services within a specific Claim
     """

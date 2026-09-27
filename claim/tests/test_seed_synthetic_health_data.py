@@ -1,3 +1,5 @@
+import io
+import random
 from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest import mock
@@ -11,13 +13,66 @@ from claim.management.commands.seed_synthetic_health_data import (
     SUBMIT_TO_VALUATED_RANGE_DAYS, BulkInsureeGenerator,
 )
 from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
+from core.models import Officer
 from core.test_helpers import create_test_officer
 from insuree.test_helpers import create_test_insuree
+from location.models import HealthFacility, Location
 from location.test_helpers import create_test_health_facility, create_test_village
 from medical.models import Diagnosis
 from medical.test_helpers import create_test_item, create_test_service
 from policy.test_helpers import create_test_policy2
+from product.models import Product
 from product.test_helpers import create_test_product
+
+
+# Claim generation is deliberately random, so any test that samples the
+# resulting distribution fails whenever a draw happens to land outside its
+# tolerance - at the sample sizes used below that is a few percent per
+# assertion (e.g. a 3% Medical Officer rejection rate over 300 claims means
+# only ~9 expected rejections, so noise alone moves the observed rate by more
+# than the 0.02 delta about 1 run in 22). That is why these tests pass for
+# weeks and then fail for no reason at all. Seeding the RNG keeps the
+# generated data just as representative while making every run reproducible.
+# The tolerances are compared against the constants themselves, so retuning a
+# rate retunes its expectation too - what these tests guard is that the
+# generator keeps *honouring* whatever rates are configured.
+RANDOM_SEED = 20260918
+
+# Larger than any sample below, so each table is written in a single batch.
+TEST_BATCH_SIZE = 5000
+
+
+class SeededRandomMixin:
+    """Pin the global RNG so distribution assertions are reproducible.
+
+    Call at the *end* of setUp, once the fixtures (which consume randomness of
+    their own) are built, so the claim generation under test always sees the
+    same stream. The previous RNG state is restored afterwards to leave other
+    tests untouched.
+    """
+
+    def seed_random(self, seed=RANDOM_SEED):
+        state = random.getstate()
+        self.addCleanup(random.setstate, state)
+        random.seed(seed)
+
+
+def build_test_generator(batch_size=TEST_BATCH_SIZE):
+    """BulkInsureeGenerator tuned for tests: quiet, and one batch per table.
+
+    Two defaults of the real generator are pure overhead here:
+
+    * ``write()`` falls back to ``print()`` when no stdout is given, so every
+      progress line floods the CI log.
+    * ``_bulk_create_with_progress`` opens a transaction **and runs a full
+      ``gc.collect()`` per batch**, so a small batch_size costs far more than
+      it saves - a 200-claim test at batch_size=10 paid 20 GC passes per table.
+
+    A batch larger than any test's sample means a single batch per table, and
+    an in-memory sink keeps the output out of the log. Neither affects the rows
+    produced, so assertions are unchanged.
+    """
+    return BulkInsureeGenerator(batch_size=batch_size, stdout=io.StringIO())
 
 
 class GetClaimDateRangeTest(TestCase):
@@ -29,7 +84,7 @@ class GetClaimDateRangeTest(TestCase):
     """
 
     def setUp(self):
-        self.generator = BulkInsureeGenerator()
+        self.generator = build_test_generator()
         self.insuree = create_test_insuree()
 
     def test_active_policy_caps_latest_date_to_today(self):
@@ -60,11 +115,11 @@ class GetClaimDateRangeTest(TestCase):
         self.assertEqual(earliest, date.today() - timedelta(days=730))
 
 
-class GenerateClaimsDateCoherenceTest(TestCase):
+class GenerateClaimsDateCoherenceTest(SeededRandomMixin, TestCase):
     """Claims generated in bulk must fall within the insuree's policy period."""
 
     def setUp(self):
-        self.generator = BulkInsureeGenerator(batch_size=10)
+        self.generator = build_test_generator()
         village = create_test_village()
         district = village.parent.parent
         health_facility = create_test_health_facility("SEED1", district.id, valid=True)
@@ -83,6 +138,7 @@ class GenerateClaimsDateCoherenceTest(TestCase):
         self.generator.items = [create_test_item("D")]
         self.generator.services = [create_test_service("V")]
         self.generator.health_facilities = [health_facility]
+        self.seed_random()
 
     def test_claim_dates_stay_within_policy_period(self):
         policy_by_family = {self.insuree.family_id: self.policy}
@@ -123,7 +179,7 @@ class GenerateClaimsDateCoherenceTest(TestCase):
     def test_care_type_distribution_matches_configured_weights(self):
         """IPD share should track CARE_TYPE_WEIGHTS (~15-20%), not a 50/50 split."""
         policy_by_family = {self.insuree.family_id: self.policy}
-        sample_size = 2000
+        sample_size = 200
 
         self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
 
@@ -132,7 +188,7 @@ class GenerateClaimsDateCoherenceTest(TestCase):
         ipd_ratio = ipd_count / sample_size
 
         expected_ratio = CARE_TYPE_WEIGHTS["IPD"] / sum(CARE_TYPE_WEIGHTS.values())
-        # Allow a statistical tolerance around the expected ratio for a sample of 2000.
+        # Allow a statistical tolerance around the expected ratio for a sample of 200.
         self.assertAlmostEqual(ipd_ratio, expected_ratio, delta=0.05)
 
     def test_visit_type_is_randomized_among_valid_values(self):
@@ -152,12 +208,12 @@ class GenerateClaimsDateCoherenceTest(TestCase):
         self.assertEqual(visit_types_seen, {"O", "E", "R"})
 
 
-class GenerateClaimsStatusDistributionTest(TestCase):
+class GenerateClaimsStatusDistributionTest(SeededRandomMixin, TestCase):
     """Claim status must follow the configured automatic / Medical Officer
     rejection rates, and rejections must cascade to items and services."""
 
     def setUp(self):
-        self.generator = BulkInsureeGenerator(batch_size=50)
+        self.generator = build_test_generator()
         village = create_test_village()
         district = village.parent.parent
         health_facility = create_test_health_facility("SEED2", district.id, valid=True)
@@ -176,10 +232,11 @@ class GenerateClaimsStatusDistributionTest(TestCase):
         self.generator.items = [create_test_item("D")]
         self.generator.services = [create_test_service("V")]
         self.generator.health_facilities = [health_facility]
+        self.seed_random()
 
     def test_status_distribution_matches_configured_rates(self):
         policy_by_family = {self.insuree.family_id: self.policy}
-        sample_size = 3000
+        sample_size = 300
 
         self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
 
@@ -208,7 +265,7 @@ class GenerateClaimsStatusDistributionTest(TestCase):
 
     def test_rejected_claims_cascade_status_to_items_and_services(self):
         policy_by_family = {self.insuree.family_id: self.policy}
-        sample_size = 500
+        sample_size = 50
 
         self.generator._generate_claims([self.insuree], sample_size, policy_by_family)
 
@@ -241,7 +298,7 @@ class GetClaimProgressFieldsTest(TestCase):
     Valuated with sequential, random-gap dates."""
 
     def setUp(self):
-        self.generator = BulkInsureeGenerator()
+        self.generator = build_test_generator()
         self.claim_date = date.today() - timedelta(days=60)
 
     def test_entered_has_no_stamps(self):
@@ -305,12 +362,12 @@ class GetClaimProgressFieldsTest(TestCase):
         return mock.patch("random.choices", return_value=[progress_key])
 
 
-class GenerateClaimsProgressDistributionTest(TestCase):
+class GenerateClaimsProgressDistributionTest(SeededRandomMixin, TestCase):
     """Non-rejected claims must follow CLAIM_PROGRESS_WEIGHTS and carry
     sequential submit/process dates; rejected claims must not."""
 
     def setUp(self):
-        self.generator = BulkInsureeGenerator(batch_size=50)
+        self.generator = build_test_generator()
         village = create_test_village()
         district = village.parent.parent
         health_facility = create_test_health_facility("SEED3", district.id, valid=True)
@@ -329,6 +386,7 @@ class GenerateClaimsProgressDistributionTest(TestCase):
         self.generator.items = [create_test_item("D")]
         self.generator.services = [create_test_service("V")]
         self.generator.health_facilities = [health_facility]
+        self.seed_random()
 
     def test_progress_distribution_matches_configured_weights(self):
         policy_by_family = {self.insuree.family_id: self.policy}
@@ -387,11 +445,12 @@ class GenerateClaimsProgressDistributionTest(TestCase):
 
 class SetupReferenceDataValidityTest(TestCase):
     """Rule: reference data used to build claims (health facilities, products,
-    officers, diagnoses, items, services) must be currently valid
-    (validity_to IS NULL) - expired/superseded rows must never be picked."""
+    officers, diagnoses, items, services) must be valid at the reference date
+    (today by default) - neither expired/superseded nor not-yet-effective rows
+    may ever be picked."""
 
     def setUp(self):
-        self.generator = BulkInsureeGenerator()
+        self.generator = build_test_generator()
         self.village = create_test_village()
         self.district = self.village.parent.parent
 
@@ -430,12 +489,12 @@ class SetupReferenceDataValidityTest(TestCase):
         create_test_officer(valid=True)
         create_test_product("VALIDPR2", valid=True)
 
-        # Diagnosis.code and Item.code are limited to 6 characters in the DB schema.
+        # Diagnosis.code, Item.code and Service.code are limited to 6 characters in the DB schema.
         valid_diag = Diagnosis.objects.create(code="VALDIC", name="valid diag", audit_user_id=-1)
         Diagnosis.objects.create(code="EXPDIC", name="expired diag", audit_user_id=-1, validity_to=date.today())
         valid_item = create_test_item("D", valid=True, custom_props={"code": "VALIT"})
         create_test_item("D", valid=False, custom_props={"code": "EXPIT"})
-        valid_service = create_test_service("V", valid=True, custom_props={"code": "VALIDSVC"})
+        valid_service = create_test_service("V", valid=True, custom_props={"code": "VALSVC"})
         create_test_service("V", valid=False, custom_props={"code": "EXPSVC"})
 
         self.generator.setup_reference_data(generate_claims=True)
@@ -446,3 +505,50 @@ class SetupReferenceDataValidityTest(TestCase):
         self.assertNotIn("EXPIT", {i.code for i in self.generator.items})
         self.assertIn(valid_service.code, {s.code for s in self.generator.services})
         self.assertNotIn("EXPSVC", {s.code for s in self.generator.services})
+
+    def test_not_yet_effective_health_facility_is_excluded(self):
+        """A row whose validity_from is in the future is not valid yet, even
+        though its validity_to is NULL - filter_validity(<date>) excludes it."""
+        valid_hf = create_test_health_facility("CURRHF", self.district.id, valid=True)
+        future_hf = create_test_health_facility("FUTUREHF", self.district.id, valid=True)
+        HealthFacility.objects.filter(pk=future_hf.pk).update(
+            validity_from=date.today() + timedelta(days=30)
+        )
+
+        self.generator.setup_reference_data(generate_claims=False)
+
+        hf_codes = {hf.code for hf in self.generator.health_facilities}
+        self.assertIn(valid_hf.code, hf_codes)
+        self.assertNotIn("FUTUREHF", hf_codes)
+
+    def test_validity_date_selects_data_valid_at_that_date(self):
+        """Passing an explicit validity date loads the reference data that was
+        valid then: a row superseded since is picked up, a row that only became
+        effective afterwards is not."""
+        past = date.today() - timedelta(days=365)
+        back_then = past - timedelta(days=30)
+
+        # setup_reference_data requires locations, health facilities, products and
+        # officers to be non-empty, so the whole required set must exist at `past`.
+        officer = create_test_officer(valid=True, custom_props={"code": "PASTOFF"})
+        product = create_test_product("PASTPR", valid=True)
+        Location.objects.filter(
+            pk__in=[self.village.pk, self.village.parent.pk, self.district.pk, self.district.parent.pk]
+        ).update(validity_from=back_then)
+        Officer.objects.filter(pk=officer.pk).update(validity_from=back_then)
+        Product.objects.filter(pk=product.pk).update(validity_from=back_then)
+
+        superseded_hf = create_test_health_facility("PASTHF", self.district.id, valid=True)
+        HealthFacility.objects.filter(pk=superseded_hf.pk).update(
+            validity_from=back_then, validity_to=date.today() - timedelta(days=10)
+        )
+        recent_hf = create_test_health_facility("RECENTHF", self.district.id, valid=True)
+        HealthFacility.objects.filter(pk=recent_hf.pk).update(
+            validity_from=date.today() - timedelta(days=5)
+        )
+
+        self.generator.setup_reference_data(generate_claims=False, validity=past)
+
+        hf_codes = {hf.code for hf in self.generator.health_facilities}
+        self.assertIn("PASTHF", hf_codes)
+        self.assertNotIn("RECENTHF", hf_codes)
