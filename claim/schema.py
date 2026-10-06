@@ -111,16 +111,16 @@ class Query(graphene.ObjectType):
 
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         # A nationwide lookup: it queries Insuree by CHFID with no location filter, so
-        # any CHFID resolves to that insuree's name wherever they live. That is a
-        # deliberate escape from the caller's district scope, and it now takes the
-        # right that names it. It used to be reachable with "create claim" or "update
-        # claim", which are about claims, not about reading the whole insuree
-        # register - so every claim clerk had it by default.
+        # any CHFID resolves to that insuree's name wherever they live. That is the
+        # enquiry, and it now takes the right that names it (101105). It used to be
+        # reachable with "create claim" or "update claim", which are about claims, not
+        # about reading the whole insuree register - so every claim clerk had it by
+        # default.
         #
         # The right is InsureeConfig's, not ClaimConfig's: the data exposed is insuree
         # data, and this resolver is only one of the places that could ask for it.
         if not info.context.user.has_perms(
-            InsureeConfig.gql_query_national_insuree_perms
+            InsureeConfig.gql_query_insuree_inquire_perms
         ):
             raise PermissionDenied(_("unauthorized"))
         chf_id = kwargs.get("chfId")
