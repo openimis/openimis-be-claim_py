@@ -12,7 +12,6 @@ from .apps import ClaimConfig
 from core import assert_string_length
 from core.schema import TinyInt, SmallInt, OpenIMISMutation
 from core.gql.gql_mutations import mutation_on_queryset_from_filter
-from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError, PermissionDenied
 from django.utils.translation import gettext as _
@@ -440,16 +439,7 @@ class CreateAttachmentMutation(OpenIMISMutation):
             if "client_mutation_label" in data:
                 data.pop("client_mutation_label")
             claim_uuid = data.pop("claim_uuid")
-            queryset = Claim.objects.filter(*Claim.filter_validity())
-            if settings.ROW_SECURITY:
-                from location.schema import LocationManager
-
-                queryset = LocationManager().build_user_location_filter_query(
-                    user._u,
-                    prefix="health_facility__location",
-                    queryset=queryset,
-                    loc_types=["D"],
-                )
+            queryset = Claim.get_queryset(Claim.objects.all(), user)
             claim = queryset.filter(uuid=claim_uuid).first()
             if not claim:
                 raise PermissionDenied(_("unauthorized"))
@@ -474,19 +464,13 @@ class UpdateAttachmentMutation(OpenIMISMutation):
 
     @classmethod
     def async_mutate(cls, user, **data):
+        attachment = None
         try:
             if not user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
                 raise PermissionDenied(_("unauthorized"))
-            queryset = ClaimAttachment.objects.filter(*ClaimAttachment.filter_validity())
-            if settings.ROW_SECURITY:
-                from location.schema import LocationManager
-
-                queryset = LocationManager().build_user_location_filter_query(
-                    user._u,
-                    prefix="claim__health_facility__location",
-                    queryset=queryset.select_related("claim"),
-                    loc_types=["D"],
-                )
+            queryset = ClaimAttachment.get_queryset(
+                ClaimAttachment.objects.filter(*ClaimAttachment.filter_validity()), user
+            )
 
             attachment = queryset.filter(id=data["id"]).first()
             if not attachment:
@@ -533,7 +517,10 @@ class UpdateAttachmentMutation(OpenIMISMutation):
             return [
                 {
                     "message": _("claim.mutation.failed_to_update_claim_attachment")
-                    % {"code": attachment.claim.code, "filename": attachment.filename},
+                    % {
+                        "code": attachment.claim.code if attachment else None,
+                        "filename": attachment.filename if attachment else None,
+                    },
                     "detail": str(exc),
                 }
             ]
@@ -548,19 +535,13 @@ class DeleteAttachmentMutation(OpenIMISMutation):
 
     @classmethod
     def async_mutate(cls, user, **data):
+        attachment = None
         try:
             if not user.has_perms(ClaimConfig.gql_mutation_update_claims_perms):
                 raise PermissionDenied(_("unauthorized"))
-            queryset = ClaimAttachment.objects.filter(*ClaimAttachment.filter_validity())
-            if settings.ROW_SECURITY:
-                from location.schema import LocationManager
-
-                queryset = LocationManager().build_user_location_filter_query(
-                    user._u,
-                    prefix="health_facility__location",
-                    queryset=queryset,
-                    loc_types=["D"],
-                )
+            queryset = ClaimAttachment.get_queryset(
+                ClaimAttachment.objects.filter(*ClaimAttachment.filter_validity()), user
+            )
             attachment = queryset.filter(id=data["id"]).first()
             if not attachment:
                 raise PermissionDenied(_("unauthorized"))
@@ -570,7 +551,10 @@ class DeleteAttachmentMutation(OpenIMISMutation):
             return [
                 {
                     "message": _("claim.mutation.failed_to_delete_claim_attachment")
-                    % {"code": attachment.claim.code, "filename": attachment.filename},
+                    % {
+                        "code": attachment.claim.code if attachment else None,
+                        "filename": attachment.filename if attachment else None,
+                    },
                     "detail": str(exc),
                 }
             ]

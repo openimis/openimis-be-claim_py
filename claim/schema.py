@@ -13,7 +13,7 @@ from django.db.models import OuterRef, Subquery, Avg, Q
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
 from django.conf import settings
-from .models import ClaimMutation, Claim
+from .models import ClaimMutation, Claim, ClaimAttachment
 from django.utils.translation import gettext as _
 from graphene_django.filter import DjangoFilterConnectionField
 from django.core.exceptions import PermissionDenied
@@ -142,16 +142,20 @@ class Query(graphene.ObjectType):
         return False if errors else True
 
     def resolve_claim(self, info, id=None, uuid=None, **kwargs):
-        if (
-            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
-            and settings.ROW_SECURITY
-        ):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
+        # A plain Field gets no queryset hook from graphene, so the lookup goes
+        # through the model's row security itself. A claim outside the user's
+        # scope resolves to null, exactly like one that does not exist, so the
+        # answer does not reveal which ids exist elsewhere.
         if id is not None:
-            return Claim.objects.get(id=id)
-        if uuid is not None:
-            return Claim.objects.get(uuid=uuid)
+            lookup = {"id": id}
+        elif uuid is not None:
+            lookup = {"uuid": uuid}
+        else:
+            return None
+        return Claim.get_queryset(Claim.objects.all(), info).filter(**lookup).first()
 
     def resolve_claims(self, info, **kwargs):
         class AttachmentStatusEnum(Enum):
@@ -238,12 +242,13 @@ class Query(graphene.ObjectType):
     def resolve_claim_attachments(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
+        return ClaimAttachment.get_queryset(ClaimAttachment.objects.all(), info)
 
     # `claimAttachmentType` had neither a resolver nor a `get_queryset` on its type:
     # the field was exposed with no verification at all, including to an anonymous
     # caller. Reference data (attachment types), so the impact is low, but it is a
-    # complete absence of any check on an entry point. Same right and same shape as
-    # `resolve_claim_attachments` just above - returning `None` lets graphene use the
+    # complete absence of any check on an entry point. Same right as
+    # `resolve_claim_attachments` just above; returning `None` lets graphene use the
     # default manager, so only the check is added.
     def resolve_claim_attachment_type(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):

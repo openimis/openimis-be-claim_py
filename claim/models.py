@@ -596,6 +596,10 @@ class ClaimAttachmentType(core_models.VersionedModel):
 
 
 class ClaimAttachment(core_models.UUIDModel, core_models.UUIDVersionedModel):
+    # An attachment is as visible as its claim. Claim scopes itself in code, so
+    # this restricts through Claim.get_queryset rather than composing a path.
+    row_scope = core_models.ParentScope("claim")
+
     claim = models.ForeignKey(Claim, models.DO_NOTHING, related_name="attachments")
     general_type = models.CharField(
         max_length=4,

@@ -133,7 +133,7 @@ class ClaimGQLType(DjangoObjectType):
         return Claim.get_queryset(queryset, info).all()
 
 
-class ClaimAttachmentGQLType(DjangoObjectType):
+class ClaimAttachmentGQLType(ScopedQuerysetMixin, DjangoObjectType):
     doc = graphene.String()
 
     class Meta:
@@ -153,9 +153,8 @@ class ClaimAttachmentGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     @classmethod
-    def get_queryset(cls, queryset, info):
-        queryset = queryset.filter(*ClaimAttachment.filter_validity())
-        return queryset
+    def refine_queryset(cls, queryset, info):
+        return queryset.filter(*ClaimAttachment.filter_validity())
 
 
 class ClaimAttachmentTypeGQLType(DjangoObjectType):

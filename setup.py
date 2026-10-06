@@ -9,7 +9,7 @@ os.chdir(os.path.normpath(os.path.join(os.path.abspath(__file__), os.pardir)))
 
 setup(
     name="openimis-be-claim",
-    version="1.11.0",
+    version="1.11.1",
     packages=find_packages(),
     include_package_data=True,
     license="GNU AGPL v3",
@@ -22,6 +22,8 @@ setup(
         "django",
         "django-db-signals",
         "djangorestframework",
+        # imported by test_factories.py, which ships in the package
+        "factory-boy",
         "openimis-be-core",
         "openimis-be-claim_batch",
         "openimis-be-insuree",
