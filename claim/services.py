@@ -290,16 +290,7 @@ class ClaimReportService(object):
     def fetch(self, uuid):
         from .models import Claim
 
-        queryset = Claim.objects.filter(*core.filter_validity())
-        if settings.ROW_SECURITY:
-            from location.models import LocationManager
-
-            queryset = LocationManager().build_user_location_filter_query(
-                self.user._u,
-                prefix="health_facility__location",
-                queryset=queryset,
-                loc_types=["D"],
-            )
+        queryset = Claim.get_queryset(Claim.objects.all(), self.user)
         claim = (
             queryset.select_related("health_facility")
             .select_related("insuree")
@@ -513,7 +504,7 @@ def update_or_create_claim(data, user):
     # doesn't work because of explicit attempt to set null to uuid!
 
     if claim_uuid:
-        claim = Claim.objects.get(uuid=claim_uuid)
+        claim = Claim.get_queryset(Claim.objects.all(), user).get(uuid=claim_uuid)
         claim = claim_update(claim, data, user)
     else:
         claim = claim_create(data, user)
@@ -525,11 +516,15 @@ def validate_claim_data(data, user):
     incoming_code = data.get("code")
     claim_uuid = data.get("uuid", None)
     restore = data.get("restore", None)
-    current_claim = Claim.objects.filter(uuid=claim_uuid).first()
+    current_claim = (
+        Claim.get_queryset(Claim.objects.all(), user).filter(uuid=claim_uuid).first()
+        if claim_uuid
+        else None
+    )
     current_code = current_claim.code if current_claim else None
 
     if restore:
-        restored_qs = Claim.objects.filter(uuid=restore)
+        restored_qs = Claim.get_queryset(Claim.objects.all(), user).filter(uuid=restore)
         restored_from_claim = restored_qs.first()
         restored_count = Claim.objects.filter(restore=restored_from_claim).count()
         if not restored_qs.exists():
@@ -738,8 +733,16 @@ def with_relative_prices(claim):
 
 
 def set_claims_status(uuids, field, status, audit_data=None, user=None):
+    """Set ``field`` to ``status`` on the claims named by ``uuids``.
+
+    With a ``user``, only the claims that user may see are changed; the others
+    are reported as not found. Without one (a system workflow such as claim
+    sampling), every named claim is changed.
+    """
     errors = []
     claims = Claim.objects.filter(uuid__in=uuids, *Claim.filter_validity())
+    if user is not None:
+        claims = Claim.get_queryset(claims, user)
     remaining_uuid = list(set(map(str.upper, uuids)))
     for claim in claims:
         remaining_uuid.remove(claim.uuid.upper())
@@ -845,7 +848,7 @@ def update_claims_dedrems(uuids, user, claims=None):
         # Additional check, empty uuids results in transaction error if uuids are queryset of uuids.
         return []
     elif uuids:
-        claims = Claim.objects.filter(uuid__in=uuids)
+        claims = Claim.get_queryset(Claim.objects.filter(uuid__in=uuids), user)
     errors = []
 
     remaining_uuid = list(map(UUID, uuids)) if uuids else []

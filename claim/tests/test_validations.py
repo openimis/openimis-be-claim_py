@@ -1188,10 +1188,6 @@ class ValidationTest(TestCase):
         self.assertIsNone(claim1.validity_to)
 
     def test_set_status(self):
-        class DummyUser:
-            id_for_audit = -1
-            id = 1
-
         insuree = create_test_insuree()
         create_test_officer(
             villages=[insuree.current_village or insuree.family.location]
@@ -1201,7 +1197,7 @@ class ValidationTest(TestCase):
             product=self.product,
         )
         set_claims_status(
-            [claim.uuid], "feedback_status", Claim.FEEDBACK_SELECTED, user=DummyUser()
+            [claim.uuid], "feedback_status", Claim.FEEDBACK_SELECTED, user=self.user
         )
         claim.refresh_from_db()
         self.assertEqual(claim.feedback_status, Claim.FEEDBACK_SELECTED)

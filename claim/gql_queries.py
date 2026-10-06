@@ -129,6 +129,8 @@ class ClaimGQLType(DjangoObjectType):
     @classmethod
     def get_queryset(cls, queryset, info):
         if info.field_name == "claimHistory":
+            # The resolver already scoped this through the current claim; the
+            # rows are superseded versions, which Claim.get_queryset would drop.
             return queryset
         return Claim.get_queryset(queryset, info).all()
 

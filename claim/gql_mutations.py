@@ -690,7 +690,8 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
             # Direct uuids path (backward compat): caller supplied explicit uuids.
             uuids = uuids or []
             claims = (
-                Claim.objects.filter(uuid__in=uuids, validity_to__isnull=True)
+                Claim.get_queryset(Claim.objects.all(), user)
+                .filter(uuid__in=uuids)
                 .prefetch_related(
                     Prefetch(
                         "items",
@@ -779,7 +780,7 @@ class BypassClaimsFeedbackMutation(OpenIMISMutation):
         if not user.has_perms(ClaimConfig.gql_mutation_bypass_claim_feedback_perms):
             raise PermissionDenied(_("unauthorized"))
         return set_claims_status(
-            data["uuids"], "feedback_status", Claim.FEEDBACK_BYPASSED
+            data["uuids"], "feedback_status", Claim.FEEDBACK_BYPASSED, user=user
         )
 
 
@@ -800,7 +801,7 @@ class SkipClaimsFeedbackMutation(OpenIMISMutation):
         if not user.has_perms(ClaimConfig.gql_mutation_skip_claim_feedback_perms):
             raise PermissionDenied(_("unauthorized"))
         return set_claims_status(
-            data["uuids"], "feedback_status", Claim.FEEDBACK_NOT_SELECTED
+            data["uuids"], "feedback_status", Claim.FEEDBACK_NOT_SELECTED, user=user
         )
 
 
@@ -824,9 +825,9 @@ class DeliverClaimFeedbackMutation(OpenIMISMutation):
                 ClaimConfig.gql_mutation_deliver_claim_feedback_perms
             ):
                 raise PermissionDenied(_("unauthorized"))
-            claim = Claim.objects.select_related("feedback").get(
-                uuid=data["claim_uuid"], validity_to__isnull=True
-            )
+            claim = Claim.get_queryset(
+                Claim.objects.select_related("feedback"), user
+            ).get(uuid=data["claim_uuid"])
             prev_feedback = claim.feedback
             prev_claim_id = claim.save_history()
             if prev_feedback:
@@ -872,7 +873,9 @@ class SelectClaimsForReviewMutation(OpenIMISMutation):
     def async_mutate(cls, user, **data):
         if not user.has_perms(ClaimConfig.gql_mutation_select_claim_review_perms):
             raise PermissionDenied(_("unauthorized"))
-        return set_claims_status(data["uuids"], "review_status", Claim.REVIEW_SELECTED)
+        return set_claims_status(
+            data["uuids"], "review_status", Claim.REVIEW_SELECTED, user=user
+        )
 
 
 class BypassClaimsReviewMutation(OpenIMISMutation):
@@ -891,7 +894,9 @@ class BypassClaimsReviewMutation(OpenIMISMutation):
     def async_mutate(cls, user, **data):
         if not user.has_perms(ClaimConfig.gql_mutation_bypass_claim_review_perms):
             raise PermissionDenied(_("unauthorized"))
-        return set_claims_status(data["uuids"], "review_status", Claim.REVIEW_BYPASSED)
+        return set_claims_status(
+            data["uuids"], "review_status", Claim.REVIEW_BYPASSED, user=user
+        )
 
 
 class DeliverClaimsReviewMutation(OpenIMISMutation):
@@ -915,6 +920,7 @@ class DeliverClaimsReviewMutation(OpenIMISMutation):
             "review_status",
             Claim.REVIEW_DELIVERED,
             {"audit_user_id_review": user.id_for_audit},
+            user=user,
         )
         # OMT-208 update the dedrem for the reviewed claims
         errors += update_claims_dedrems(data["uuids"], user)
@@ -939,7 +945,7 @@ class SkipClaimsReviewMutation(OpenIMISMutation):
         if not user.has_perms(ClaimConfig.gql_mutation_skip_claim_review_perms):
             raise PermissionDenied(_("unauthorized"))
         return set_claims_status(
-            data["uuids"], "review_status", Claim.REVIEW_NOT_SELECTED
+            data["uuids"], "review_status", Claim.REVIEW_NOT_SELECTED, user=user
         )
 
 
@@ -964,8 +970,10 @@ class SaveClaimReviewMutation(OpenIMISMutation):
         try:
             if not user.has_perms(ClaimConfig.gql_mutation_deliver_claim_review_perms):
                 raise PermissionDenied(_("unauthorized"))
-            claim = Claim.objects.get(
-                uuid=UUID(str(data["claim_uuid"])), validity_to__isnull=True
+            claim = (
+                Claim.get_queryset(Claim.objects.all(), user)
+                .filter(uuid=UUID(str(data["claim_uuid"])))
+                .first()
             )
             if claim is None:
                 return [
@@ -1110,7 +1118,8 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
         uuids = data.get("uuids", None)
         client_mutation_id = data.get("client_mutation_id", None)
         claims = (
-            Claim.objects.filter(uuid__in=uuids)
+            Claim.get_queryset(Claim.objects.all(), user)
+            .filter(uuid__in=uuids)
             .prefetch_related(
                 Prefetch("items", queryset=ClaimItem.objects.filter(*ClaimItem.filter_validity()))
             )
@@ -1137,7 +1146,7 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
                 errors.append({"title": claim.code, "list": c_errors})
             claim.save()
         if len(remaining_uuid):
-            errors += {
+            errors.append({
                 "title": _("error"),
                 "list": [
                     {
@@ -1145,7 +1154,7 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
                         % {"id": ",".join(remaining_uuid)}
                     }
                 ],
-            }
+            })
         if len(errors) == 1:
             errors = errors[0]["list"]
         cls.add_submission_stats_to_mutation_log(client_mutation_id, uuids)
@@ -1175,7 +1184,8 @@ class DeleteClaimsMutation(OpenIMISMutation):
         errors = []
         for claim_uuid in data["uuids"]:
             claim = (
-                Claim.objects.filter(uuid=claim_uuid)
+                Claim.get_queryset(Claim.objects.all(), user)
+                .filter(uuid=claim_uuid)
                 .prefetch_related(
                     Prefetch(
                         "items", queryset=ClaimItem.objects.filter(*ClaimItem.filter_validity())
@@ -1190,7 +1200,7 @@ class DeleteClaimsMutation(OpenIMISMutation):
                 .first()
             )
             if claim is None:
-                errors += {
+                errors.append({
                     "title": claim_uuid,
                     "list": [
                         {
@@ -1198,7 +1208,7 @@ class DeleteClaimsMutation(OpenIMISMutation):
                             % {"id": claim_uuid}
                         }
                     ],
-                }
+                })
                 continue
             errors += set_claim_deleted(claim)
         if len(errors) == 1:
@@ -1212,16 +1222,18 @@ def set_claim_deleted(claim):
         return []
     except Exception as exc:
         logger.debug(exc)
-        return {
-            "title": claim.code,
-            "list": [
-                {
-                    "message": _("claim.mutation.failed_to_change_status_of_claim")
-                    % {"code": claim.code},
-                    "detail": claim.uuid,
-                }
-            ],
-        }
+        return [
+            {
+                "title": claim.code,
+                "list": [
+                    {
+                        "message": _("claim.mutation.failed_to_change_status_of_claim")
+                        % {"code": claim.code},
+                        "detail": claim.uuid,
+                    }
+                ],
+            }
+        ]
 
 
 def processing_claim(claim, user, is_process):

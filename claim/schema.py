@@ -12,7 +12,6 @@ from core.schema import (
 from django.db.models import OuterRef, Subquery, Avg, Q
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
-from django.conf import settings
 from .models import ClaimMutation, Claim, ClaimAttachment
 from django.utils.translation import gettext as _
 from graphene_django.filter import DjangoFilterConnectionField
@@ -163,10 +162,7 @@ class Query(graphene.ObjectType):
             WITH = 1
             WITHOUT = 2
 
-        if (
-            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
-            and settings.ROW_SECURITY
-        ):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
         query = Claim.objects
         filters = []
@@ -297,14 +293,17 @@ class Query(graphene.ObjectType):
     def resolve_claim_history(self, info, **kwargs):
         claim_uuid = kwargs.get('claim_uuid')
 
-        if (
-            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
-            and settings.ROW_SECURITY
-        ):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
+        # History rows are superseded (validity_to set), so Claim.get_queryset,
+        # which keeps current rows only, cannot filter them directly. The history
+        # of a claim is visible when the claim itself is: scope the current claim
+        # and follow legacy_id from there. ClaimGQLType.get_queryset leaves this
+        # field alone for the same reason.
+        current_claim = Claim.get_queryset(Claim.objects.all(), info).filter(uuid=claim_uuid)
         query = Claim.objects.filter(
-            legacy_id=Subquery(Claim.objects.filter(uuid=claim_uuid).values('id')),
+            legacy_id=Subquery(current_claim.values('id')),
             validity_to__isnull=False
         )
 

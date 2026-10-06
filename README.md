@@ -59,6 +59,25 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 ## Reports
 * `claim_claim`: Claim summary
 
+## Row security
+
+Which claims a user may see is defined once, in `Claim.get_queryset`: a user
+attached to a health facility sees that facility's claims, any other user the
+claims of health facilities in their districts. Everything else follows it:
+
+* `ClaimItem`, `ClaimService` and `ClaimAttachment` declare `ParentScope("claim")`,
+  so they are as visible as their claim.
+* `claim`, `claims`, `claimAttachments`, `claimHistory` (through the current
+  claim), the attachment download (`attach/`), the print endpoint, and every
+  mutation that acts on a claim or attachment uuid start from `Claim.get_queryset`
+  / `ClaimAttachment.get_queryset`. A claim outside the user's scope is reported
+  as not found.
+* The query and mutation rights are always checked, whether or not
+  `ROW_SECURITY` is on. `ROW_SECURITY=False` only lifts the location scope.
+* `services.set_claims_status` scopes to the claims of the `user` it is given;
+  called without one (a system workflow such as claim sampling) it changes every
+  named claim.
+
 ## Configuration options (can be changed via core.ModuleConfiguration)
 * default_validations_disabled: bypass (defaul) claim validations in Submit and Process mutations (default: False)
 * gql_query_claims_perms: required rights to call claims GraphQL Query
