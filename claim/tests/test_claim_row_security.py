@@ -156,8 +156,20 @@ class ClaimRowSecurityTests(openIMISGraphQLTestCase):
         return Claim.objects.get(id=self.claim_b.id)
 
     def test_delete_refuses_foreign_claim(self):
+        """The refusal is asserted on the outcome, not on the message text.
+
+        This used to assert that the message names the claim. It cannot: the
+        mutation builds {"title": uuid, "list": [...]} and then collapses a
+        single error to its `list`, dropping the title, so the uuid only ever
+        reached the message through `_("claim.validation.id_does_not_exist")
+        % {"id": uuid}` - and that key carries no placeholder. The assertion
+        passed only where a compiled catalogue translated the key to
+        "id %s does not exist", which with a dict argument renders the dict
+        itself and leaves the uuid in the string by accident. With no
+        catalogue, as in CI, the message is the bare key and the test failed.
+        """
         errors = DeleteClaimsMutation.async_mutate(self.user_a, uuids=[self.claim_b.uuid])
-        self.assertIn(self.claim_b.uuid, errors[0]["message"])
+        self.assertTrue(errors, "a claim outside the user's districts was deleted")
         self.assertIsNone(self._reload_b().validity_to)
 
     def test_process_refuses_foreign_claim(self):

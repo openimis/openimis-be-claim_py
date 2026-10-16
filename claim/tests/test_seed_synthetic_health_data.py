@@ -18,7 +18,7 @@ from core.test_helpers import create_test_officer
 from insuree.test_helpers import create_test_insuree
 from location.models import HealthFacility, Location
 from location.test_helpers import create_test_health_facility, create_test_village
-from medical.models import Diagnosis
+from medical.models import Diagnosis, Item, Service
 from medical.test_helpers import create_test_item, create_test_service
 from policy.test_helpers import create_test_policy2
 from product.models import Product
@@ -489,6 +489,19 @@ class SetupReferenceDataValidityTest(TestCase):
         create_test_officer(valid=True)
         create_test_product("VALIDPR2", valid=True)
 
+        # `setup_reference_data` caps each catalogue - [:500] for diagnoses and
+        # services, [:1000] for items - and the slice is unordered, so which
+        # rows survive it is the database's physical order. On an instance
+        # seeded with the full ICD list the rows created below fall outside the
+        # slice and *both* assertions stop meaning anything: the valid one is
+        # missing, and the expired one is "absent" for the wrong reason.
+        # Close what is already there so the generator sees exactly this pair.
+        # Rolled back with the test.
+        already_valid = date.today()
+        Diagnosis.objects.filter(validity_to__isnull=True).update(validity_to=already_valid)
+        Item.objects.filter(validity_to__isnull=True).update(validity_to=already_valid)
+        Service.objects.filter(validity_to__isnull=True).update(validity_to=already_valid)
+
         # Diagnosis.code, Item.code and Service.code are limited to 6 characters in the DB schema.
         valid_diag = Diagnosis.objects.create(code="VALDIC", name="valid diag", audit_user_id=-1)
         Diagnosis.objects.create(code="EXPDIC", name="expired diag", audit_user_id=-1, validity_to=date.today())
@@ -498,6 +511,12 @@ class SetupReferenceDataValidityTest(TestCase):
         create_test_service("V", valid=False, custom_props={"code": "EXPSVC"})
 
         self.generator.setup_reference_data(generate_claims=True)
+
+        # the pair and nothing else - if this ever grows, the cap is back in
+        # play and the assertions below stop being trustworthy
+        self.assertEqual(len(self.generator.diagnoses), 1)
+        self.assertEqual(len(self.generator.items), 1)
+        self.assertEqual(len(self.generator.services), 1)
 
         self.assertIn(valid_diag.code, {d.code for d in self.generator.diagnoses})
         self.assertNotIn("EXPDIC", {d.code for d in self.generator.diagnoses})
