@@ -325,6 +325,14 @@ class Query(graphene.ObjectType):
         if filters:
             query = query.filter(*filters).distinct()
 
+        # A history with no order is not a history: these rows were coming back
+        # in whatever order the database happened to hold them, so the same
+        # query could return the versions either way round. Oldest supersession
+        # first, which is how a timeline reads; `orderBy` still overrides it.
+        # This is what made test_claim_history_query pass or fail depending on
+        # the order the test suite happened to run in (OP-3198).
+        query = query.order_by("validity_to")
+
         return gql_optimizer.query(query, info)
 
 
