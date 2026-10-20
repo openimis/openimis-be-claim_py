@@ -20,7 +20,7 @@ from claim.test_helpers import (
     mark_test_claim_as_processed,
 )
 from core.test_helpers import create_test_officer, create_test_interactive_user
-from datetime import date, timedelta, datetime
+from datetime import date, time, timedelta, datetime
 from claim.validations import (
     get_claim_category,
     validate_claim,
@@ -1445,6 +1445,44 @@ class ValidationTest(TestCase):
         print(f"There is the error: {errors}")
         self.assertEqual(len(errors), 0)
 
+    def _created_late_today(self, entity):
+        # A medical item or service created on the care date, late in the day: its
+        # validity_from is a timestamp after the care date's midnight.
+        entity.validity_from = datetime.combine(date.today(), time(23, 0))
+        entity.save()
+        return entity
+
+    def test_validate_claimitem_created_on_care_date(self):
+        # OP-3233: validity_from was compared with the care date at midnight, so an
+        # item created on the care date was rejected as not yet valid (reason 9).
+        item = self._created_late_today(create_test_item("D", valid=True))
+        claim = create_test_claim(
+            {"date_from": date.today(), "date_to": date.today(), "date_claimed": date.today()}
+        )
+        claim_item = create_test_claimitem(claim, custom_props={"item_id": item.id})
+
+        errors = validate_claim(claim, check_max=True)
+
+        self.assertNotIn(REJECTION_REASON_TARGET_DATE, [e["code"] for e in errors])
+        claim_item.refresh_from_db()
+        self.assertNotEqual(claim_item.rejection_reason, REJECTION_REASON_TARGET_DATE)
+
+    def test_validate_claimservice_created_on_care_date(self):
+        # OP-3233: same as test_validate_claimitem_created_on_care_date, for services
+        service = self._created_late_today(create_test_service("D", valid=True))
+        claim = create_test_claim(
+            {"date_from": date.today(), "date_to": date.today(), "date_claimed": date.today()}
+        )
+        claim_service = create_test_claimservice(
+            claim, custom_props={"service_id": service.id}
+        )
+
+        errors = validate_claim(claim, check_max=True)
+
+        self.assertNotIn(REJECTION_REASON_TARGET_DATE, [e["code"] for e in errors])
+        claim_service.refresh_from_db()
+        self.assertNotEqual(claim_service.rejection_reason, REJECTION_REASON_TARGET_DATE)
+
     def test_validate_claimitem_future_validity(self):
         # Given
         future_date = date.today() + timedelta(days=30)
@@ -1452,7 +1490,9 @@ class ValidationTest(TestCase):
         item_future.validity_from = future_date
         item_future.save()
 
-        claim = create_test_claim({"date_from": date.today(), "date_to": date.today()})
+        claim = create_test_claim(
+            {"date_from": date.today(), "date_to": date.today(), "date_claimed": date.today()}
+        )
         claim_item = create_test_claimitem(
             claim, custom_props={"item_id": item_future.id}
         )
@@ -1485,7 +1525,13 @@ class ValidationTest(TestCase):
         service_future.save()
         insuree = create_test_insuree()
         claim = create_test_claim(
-            {"insuree": insuree, "date_from": date.today(), "date_to": date.today()}
+            {
+                "insuree": insuree,
+                "date_from": date.today(),
+                "date_to": date.today(),
+                "date_claimed": date.today(),
+            },
+            product=self.product,
         )
         claim_service = create_test_claimservice(
             claim, custom_props={"service_id": service_future.id}
