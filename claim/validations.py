@@ -1501,6 +1501,23 @@ def validate_claimservices(
     return errors
 
 
+def valid_after_date(validity_from, target_date):
+    """
+    Whether a row version only became valid after target_date.
+
+    validity_from is a timestamp and target_date a business date: compare them by
+    day, as core.utils.filter_validity does, so that a row created during the
+    target date is valid on that date.
+    """
+    if not validity_from:
+        return False
+    if isinstance(validity_from, datetime):
+        validity_from = validity_from.date()
+    if isinstance(target_date, datetime):
+        target_date = target_date.date()
+    return validity_from > target_date
+
+
 def validate_claimitem_validity(claim, claimitem):
     errors = []
     target_date = get_claim_target_date(claim)
@@ -1514,7 +1531,7 @@ def validate_claimitem_validity(claim, claimitem):
                 "detail": claim.uuid,
             }
         ]
-    elif claimitem.item.validity_from and claimitem.item.validity_from > target_date:
+    elif valid_after_date(claimitem.item.validity_from, target_date):
         claimitem.rejection_reason = REJECTION_REASON_TARGET_DATE
         errors += [
             {
@@ -1543,10 +1560,7 @@ def validate_claimservice_validity(claim, claimservice):
                 "detail": claim.uuid,
             }
         ]
-    elif (
-        claimservice.service.validity_from
-        and claimservice.service.validity_from > target_date
-    ):
+    elif valid_after_date(claimservice.service.validity_from, target_date):
         claimservice.rejection_reason = REJECTION_REASON_TARGET_DATE
         errors += [
             {
