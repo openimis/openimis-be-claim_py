@@ -1133,6 +1133,11 @@ def validate_claim(claim, check_max, process_dedrem_opt=True, policies=None, is_
         root_services = set(s.service for s in service_pricelist_dict.values())
     if len(errors) == 0:
         base_category = get_claim_category(claim, root_services)
+        # policies may come in as a QuerySet (processing_claim); keep only the
+        # policies whose category maximum is not reached yet, without mutating the
+        # sequence being iterated
+        covering_policies = []
+        category_errors = []
         for plc in policies:
             policy_errors = check_claim_max_no_category(
                 base_category,
@@ -1143,9 +1148,13 @@ def validate_claim(claim, check_max, process_dedrem_opt=True, policies=None, is_
                 claim,
             )
             if len(policy_errors) > 0:
-                if len(policies) == 1:
-                    errors += policy_errors
-                policies.remove(plc)
+                category_errors.append(policy_errors)
+            else:
+                covering_policies.append(plc)
+        policies = covering_policies
+        if not policies and category_errors:
+            errors += category_errors[0]
+            claim.reject(category_errors[0][0]["code"])
     else:
         claim.status = Claim.STATUS_REJECTED
         claim.rejection_reason = REJECTION_REASON_NO_COVERAGE
