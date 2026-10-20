@@ -1148,7 +1148,7 @@ def validate_claim(claim, check_max, process_dedrem_opt=True, policies=None, is_
                 policies.remove(plc)
     else:
         claim.status = Claim.STATUS_REJECTED
-        claim.rejection_reason = REJECTION_REASON_NO_COVERAGE
+        claim.rejection_reason = errors[0]["code"]
         claim.save()
         return errors
     if len(errors) == 0:
@@ -1710,7 +1710,7 @@ def validate_insuree(claim, insuree, policies=None):
         ]
 
     if len(errors) > 0:
-        claim.reject(REJECTION_REASON_FAMILY)
+        claim.reject(errors[0]["code"])
     return errors
 
 

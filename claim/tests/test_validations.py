@@ -50,6 +50,7 @@ from product.test_helpers import (
     create_test_product_item,
 )
 from copy import copy
+from claim.validations import REJECTION_REASON_FAMILY, REJECTION_REASON_NO_COVERAGE
 
 import uuid
 
@@ -303,6 +304,62 @@ class ValidationTest(TestCase):
         self.assertEqual(len(errors), 2)
         self.assertEqual(errors[0]['code'], 1)  # claimed rejected because all services are rejected
         self.assertEqual(claim1.services.first().rejection_reason, 4)  # reason is wrong insuree mask
+
+    def _assert_claim_rejected(self, claim, reason):
+        # OP-3232: the claim and every one of its rows carry the reason of the
+        # first error, and the rows are Rejected, not Passed
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_REJECTED)
+        self.assertEqual(claim.rejection_reason, reason)
+        details = list(claim.items.filter(validity_to__isnull=True)) + list(
+            claim.services.filter(validity_to__isnull=True)
+        )
+        self.assertTrue(details)
+        for detail in details:
+            self.assertEqual(detail.rejection_reason, reason)
+            self.assertEqual(detail.status, ClaimDetail.STATUS_REJECTED)
+
+    def test_validate_claim_rejected_on_deleted_family(self):
+        insuree = create_test_insuree()
+        claim = create_test_claim({"insuree_id": insuree.id}, product=self.product)
+        create_test_claimservice(claim, "V", product=self.product)
+        create_test_claimitem(claim, "D", product=self.product)
+        insuree.family.validity_to = datetime.now()
+        insuree.family.save()
+        claim.refresh_from_db()
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual(errors[0]["code"], REJECTION_REASON_FAMILY)
+        self._assert_claim_rejected(claim, REJECTION_REASON_FAMILY)
+
+    def test_validate_claim_rejected_on_claim_date_before_care(self):
+        insuree = create_test_insuree()
+        date_from = datetime.now() - timedelta(days=2)
+        claim = create_test_claim(
+            {
+                "insuree_id": insuree.id,
+                "date_from": date_from,
+                "date_claimed": date_from - timedelta(days=1),
+            },
+            product=self.product,
+        )
+        create_test_claimservice(claim, "V", product=self.product)
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual(errors[0]["code"], REJECTION_REASON_TARGET_DATE)
+        self._assert_claim_rejected(claim, REJECTION_REASON_TARGET_DATE)
+
+    def test_validate_claim_rejected_without_policy(self):
+        insuree = create_test_insuree()
+        claim = create_test_claim({"insuree_id": insuree.id})
+        create_test_claimservice(claim, "V")
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual(errors[0]["code"], REJECTION_REASON_NO_COVERAGE)
+        self._assert_claim_rejected(claim, REJECTION_REASON_NO_COVERAGE)
 
     def test_validate_late_policy(self):
         # When the insuree already reaches his limit of visits

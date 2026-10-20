@@ -294,10 +294,10 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
 
     def reject(self, rejection_code):
         updated_items = self.items.filter(validity_to__isnull=True).update(
-            rejection_reason=rejection_code
+            rejection_reason=rejection_code, status=ClaimDetail.STATUS_REJECTED
         )
         updated_services = self.services.filter(validity_to__isnull=True).update(
-            rejection_reason=rejection_code
+            rejection_reason=rejection_code, status=ClaimDetail.STATUS_REJECTED
         )
         signal_claim_rejection.send(sender=self.__class__, claim=self)
         return updated_items + updated_services
