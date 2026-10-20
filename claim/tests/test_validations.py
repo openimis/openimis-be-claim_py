@@ -27,12 +27,15 @@ from claim.validations import (
     REJECTION_REASON_WAITING_PERIOD_FAIL,
     REJECTION_REASON_INVALID_ITEM_OR_SERVICE,
     REJECTION_REASON_TARGET_DATE,
+    REJECTION_REASON_MAX_CONSULTATIONS,
 )
 from django.test import TestCase
+from unittest import mock
 from insuree.test_helpers import create_test_insuree
 from location.test_helpers import create_test_health_facility
 
 from product.models import ProductItemOrService
+from medical.models import Service
 from medical.test_helpers import create_test_service, create_test_item
 from medical_pricelist.test_helpers import (
     add_service_to_hf_pricelist,
@@ -1447,3 +1450,58 @@ class ValidationTest(TestCase):
         claim_service.delete()
         claim.delete()
         service_future.delete()
+
+    def _create_consultation_over_limit(self, products):
+        # An insuree covered by one policy per product, each product allowing a single
+        # consultation, and a first consultation claim already checked.
+        insuree = create_test_insuree()
+        for product in products:
+            create_test_policy2(product, insuree, link=True)
+        service = create_test_service(Service.CATEGORY_CONSULTATION)
+        first_claim = create_test_claim({"insuree_id": insuree.id})
+        create_test_claimservice(
+            first_claim, custom_props={"service_id": service.id}, product=products[0]
+        )
+        mark_test_claim_as_processed(first_claim)
+        self.assertEqual(first_claim.category, Service.CATEGORY_CONSULTATION)
+
+        second_claim = create_test_claim(
+            {"insuree_id": insuree.id, "health_facility": first_claim.health_facility}
+        )
+        create_test_claimservice(
+            second_claim, custom_props={"service_id": service.id}
+        )
+        return second_claim
+
+    @mock.patch("claim.services.ClaimSubmitService._validate_user_hf")
+    def test_submit_claim_over_category_maximum(self, validate_user_hf):
+        # OP-3231: submit passes the policies as a QuerySet, on which the category
+        # check called .remove() and crashed instead of rejecting the claim.
+        validate_user_hf.return_value = True
+        product = create_test_product("MAXCONS", custom_props={"max_no_consultation": 1})
+        claim = self._create_consultation_over_limit([product])
+        user = mock.Mock(is_anonymous=False, id=1, id_for_audit=-1)
+        user.has_perms = mock.MagicMock(return_value=True)
+
+        claim, errors = ClaimSubmitService(user).submit_claim(claim)
+
+        claim.refresh_from_db()
+        self.assertIn(REJECTION_REASON_MAX_CONSULTATIONS, [e["code"] for e in errors])
+        self.assertEqual(claim.status, Claim.STATUS_REJECTED)
+        self.assertEqual(claim.rejection_reason, REJECTION_REASON_MAX_CONSULTATIONS)
+        for service in claim.services.filter(validity_to__isnull=True):
+            self.assertEqual(service.rejection_reason, REJECTION_REASON_MAX_CONSULTATIONS)
+
+    def test_validate_claim_over_category_maximum_on_every_policy(self):
+        # OP-3231: the category check removed policies from the list it iterated over,
+        # so with two policies over the limit the second was never checked and the
+        # claim was accepted.
+        products = [
+            create_test_product(code, custom_props={"max_no_consultation": 1})
+            for code in ("MAXCON1", "MAXCON2")
+        ]
+        claim = self._create_consultation_over_limit(products)
+
+        errors = validate_claim(claim, True)
+
+        self.assertIn(REJECTION_REASON_MAX_CONSULTATIONS, [e["code"] for e in errors])
