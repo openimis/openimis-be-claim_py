@@ -1689,8 +1689,12 @@ def validate_claimservice_frequency(claim, claimservice, target_date, history):
 def validate_target_date(claim):
     errors = []
     if (
-        claim.date_from is None and claim.date_to is None
-    ) or claim.date_claimed < claim.date_from:
+        (claim.date_from is None and claim.date_to is None)
+        or claim.date_claimed < claim.date_from
+        # entry saves such a claim in Error, never Entered; this catches one
+        # stored before that check, or by another path
+        or (claim.date_to is not None and claim.date_to < claim.date_from)
+    ):
         claim.reject(REJECTION_REASON_TARGET_DATE)
         errors += [
             {

@@ -274,6 +274,11 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
         managed = True
         db_table = "tblClaim"
 
+    # Saved with a field error (e.g. care ending before it starts): editable like
+    # Entered, but cannot be submitted until a save with valid fields moves it to
+    # Entered. Below Entered so that counts of earlier claims
+    # (status__gt=STATUS_ENTERED) leave it out.
+    STATUS_ERROR = 0
     STATUS_REJECTED = 1
     STATUS_ENTERED = 2
     STATUS_CHECKED = 4
