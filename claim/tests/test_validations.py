@@ -354,6 +354,28 @@ class ValidationTest(TestCase):
         self.assertEqual(errors[0]["code"], REJECTION_REASON_TARGET_DATE)
         self._assert_claim_rejected(claim, REJECTION_REASON_TARGET_DATE)
 
+    def test_validate_claim_rejected_on_care_end_before_start(self):
+        # OP-3239: a claim stored with its care ending before it starts (saved
+        # before entry validation existed, or by another path) is rejected at
+        # submission, not checked
+        insuree = create_test_insuree()
+        date_from = datetime.now() - timedelta(days=2)
+        claim = create_test_claim(
+            {
+                "insuree_id": insuree.id,
+                "date_from": date_from,
+                "date_to": date_from - timedelta(days=1),
+                "date_claimed": date_from,
+            },
+            product=self.product,
+        )
+        create_test_claimservice(claim, "V", product=self.product)
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual([e["code"] for e in errors[:1]], [REJECTION_REASON_TARGET_DATE])
+        self._assert_claim_rejected(claim, REJECTION_REASON_TARGET_DATE)
+
     def test_validate_claim_rejected_without_policy(self):
         insuree = create_test_insuree()
         claim = create_test_claim({"insuree_id": insuree.id})

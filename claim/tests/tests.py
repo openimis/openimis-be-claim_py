@@ -17,6 +17,7 @@ from claim.services import processing_claim, ClaimSubmitService, ClaimSubmitErro
 import datetime
 from unittest import mock
 from django.core.cache import caches
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from core.utils import clear_current_user, clear_history_context
 from core.test_helpers import create_medical_officer_role
@@ -462,6 +463,147 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         self.assertEqual(edges[1]['node']['code'], self.claim.code)
         self.assertIsNotNone(edges[1]['node']['validityTo'])
         self.assertEqual(edges[1]['node']['status'], Claim.STATUS_CHECKED)
+
+    def _claim_mutation(self, mutation, mutation_id, code, date_from, date_to, extra=""):
+        return self.query(
+            f"""
+            mutation {{
+                {mutation}(
+                    input: {{
+                    clientMutationId: "{mutation_id}"
+                    clientMutationLabel: "{mutation} - {code}"
+                    code: "{code}"
+                    {extra}
+                    insureeId: {self.insuree.id}
+                    adminId: {self.claim_admin.id}
+                    dateFrom: "{date_from}"
+                    dateTo: "{date_to}"
+                    icdId: {self.icd.id}
+                    dateClaimed: "{date_from}"
+                    healthFacilityId: {self.claim_admin.health_facility.id}
+                    visitType: "O"
+                    services: [
+                        {{
+                        serviceId: {self.service.id}
+                        priceAsked: "10.00"
+                        qtyProvided: "1.00"
+                        status: 1,
+                        serviceItemSet: [],
+                        serviceServiceSet: []
+                        }}
+                    ]
+                    items: []
+                    }}
+                ) {{
+                    clientMutationId
+                    internalId
+                }}
+            }}
+            """,
+            headers={"HTTP_AUTHORIZATION": f"Bearer {self.admin_token}"},
+        )
+
+    def _mutation_errors(self, mutation_id):
+        from core.models import MutationLog
+
+        self.get_mutation_result(mutation_id, self.admin_token, allow_exceptions=False)
+        log = MutationLog.objects.get(client_mutation_id=mutation_id)
+        return json.loads(log.error) if log.error else []
+
+    def test_create_claim_end_before_start_saved_in_error(self):
+        # OP-3239: a field error does not lose the claim: it is saved with status
+        # Error (0) and the mutation reports the entry error code 4 ("End date is
+        # smaller than start date", ClaimSubmitError) with the claim uuid
+        mutation_id = "6a3f3a5e-6a51-4d0e-9f53-0b4f0c3239a1"
+        self._claim_mutation(
+            "createClaim", mutation_id, "err-c-claim", "2023-12-06", "2023-12-05",
+            extra="autogenerate: false",
+        )
+        errors = self._mutation_errors(mutation_id)
+
+        claim = Claim.objects.filter(code="err-c-claim", validity_to__isnull=True).first()
+        self.assertIsNotNone(claim, "the claim must be saved despite the field error")
+        self.assertEqual(claim.status, 0, "claim status should be Error (0)")
+        self.assertEqual(claim.services.filter(validity_to__isnull=True).count(), 1)
+        self.assertEqual([e.get("code") for e in errors], [4], errors)
+        self.assertEqual(errors[0].get("detail"), str(claim.uuid))
+
+    def test_update_claim_in_error_with_valid_dates_becomes_entered(self):
+        # OP-3239: correcting a claim in Error is a plain update, and moves it to
+        # Entered so that it can be submitted
+        claim = create_test_claim(
+            custom_props={"insuree_id": self.insuree.id, "status": 0, "code": "err-u-claim"}
+        )
+        mutation_id = "6a3f3a5e-6a51-4d0e-9f53-0b4f0c3239a2"
+        self._claim_mutation(
+            "updateClaim", mutation_id, "err-u-claim", "2023-12-05", "2023-12-06",
+            extra=f'uuid: "{claim.uuid}"',
+        )
+        errors = self._mutation_errors(mutation_id)
+
+        claim = Claim.objects.get(code="err-u-claim", validity_to__isnull=True)
+        self.assertEqual(errors, [])
+        self.assertEqual(claim.status, Claim.STATUS_ENTERED)
+
+    def _restore_data(self, original, code, date_from, date_to):
+        from core.utils import TimeUtils
+
+        return {
+            "code": code,
+            "restore": str(original.uuid),
+            "insuree_id": self.insuree.id,
+            "admin_id": self.claim_admin.id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "date_claimed": date_from,
+            "icd_id": self.icd.id,
+            "health_facility_id": self.claim_admin.health_facility.id,
+            "status": Claim.STATUS_ENTERED,
+            "validity_from": TimeUtils.now(),
+            "services": [],
+            "items": [],
+        }
+
+    @mock.patch("claim.apps.ClaimConfig.claim_max_restore", 2)
+    def test_restore_count_ignores_history_and_error(self):
+        # OP-3239: claim_max_restore counts the current rows of restored claims
+        # only: the history rows an update or a submission leaves, and the Error
+        # version of a restored claim that was then corrected, are not restores
+        from claim.services import update_or_create_claim
+
+        original = create_test_claim(
+            custom_props={
+                "insuree_id": self.insuree.id,
+                "status": Claim.STATUS_REJECTED,
+                "code": "rst-orig",
+            }
+        )
+        day = datetime.date(2023, 12, 6)
+        # first restore, with a typo in the dates: saved in Error
+        restored = update_or_create_claim(
+            self._restore_data(original, "rst-1", day, day - datetime.timedelta(days=1)),
+            self.admin_user,
+        )
+        restored.refresh_from_db()
+        self.assertEqual(restored.status, 0, "claim status should be Error (0)")
+        # corrected by an update: Entered, and the Error version becomes history
+        data = self._restore_data(original, "rst-1", day, day)
+        data.pop("restore")
+        data.pop("status")
+        data["uuid"] = str(restored.uuid)
+        restored = update_or_create_claim(data, self.admin_user)
+        restored.refresh_from_db()
+        self.assertEqual(restored.status, Claim.STATUS_ENTERED)
+        # a submission leaves another history row
+        restored.save_history()
+
+        # one restore so far: a second one is still allowed
+        try:
+            update_or_create_claim(
+                self._restore_data(original, "rst-2", day, day), self.admin_user
+            )
+        except ValidationError as exc:
+            self.fail(f"second restore refused, history rows were counted: {exc}")
 
 
 class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):

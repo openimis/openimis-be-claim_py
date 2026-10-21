@@ -441,6 +441,68 @@ class ClaimSubmitServiceTestCase(TestCase):
         result = calcul_amount_service(service_items_dict)
         self.assertEqual(result, 137)
 
+    @mock.patch("claim.services.ClaimSubmitService._validate_user_hf")
+    @mock.patch("claim.services.ClaimCreateService._validate_user_hf")
+    def test_claim_enter_and_submit_end_before_start_saved_in_error(
+        self, check_hf_submit, check_hf_enter
+    ):
+        # OP-3239: the FHIR path saves a claim with a field error in Error (0)
+        # instead of losing it, and does not submit it
+        check_hf_submit.return_value, check_hf_enter.return_value = True, True
+        mock_user = mock.Mock(is_anonymous=False)
+        mock_user.has_perm = mock.MagicMock(return_value=True)
+        mock_user.id_for_audit = -1
+        from datetime import date, timedelta
+
+        start_date = date.today() - timedelta(days=1)
+        end_date = date.today() - timedelta(days=2)
+        claim = self._get_test_dict(
+            code="e_n_s_err", start_date=start_date, end_date=end_date
+        )
+        service = ClaimSubmitService(user=mock_user)
+        claim = service.enter_and_submit(claim, True)
+
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, 0, "claim status should be Error (0)")
+        self.assertIsNone(claim.audit_user_id_submit, "claim was submitted")
+        self.assertEqual(claim.items.all().count(), 1)
+        self.assertEqual(claim.services.all().count(), 1)
+
+    @mock.patch("claim.services.ClaimSubmitService._validate_user_hf")
+    def test_submit_refuses_claim_not_entered(self, check_hf_submit):
+        # OP-3239: only Entered claims can be submitted; any other status is
+        # refused with REJECTION_REASON_INVALID_CLAIM (20) and left unchanged
+        check_hf_submit.return_value = True
+        mock_user = mock.Mock(is_anonymous=False)
+        mock_user.has_perm = mock.MagicMock(return_value=True)
+        mock_user.id_for_audit = -1
+        service = ClaimSubmitService(user=mock_user)
+        for status in (0, Claim.STATUS_CHECKED, Claim.STATUS_REJECTED):
+            with self.subTest(status=status):
+                claim = Claim.objects.create(
+                    date_claimed=self.test_claim.date_claimed,
+                    code=f"not_entered_{status}",
+                    icd=self.test_icd,
+                    claimed=0,
+                    date_from=self.test_claim.date_from,
+                    admin=self.test_claim_admin,
+                    insuree=self.test_insuree,
+                    health_facility=self.test_hf,
+                    status=status,
+                    audit_user_id=-1,
+                )
+
+                claim, errors = service.submit_claim(claim)
+
+                self.assertEqual([e.get("code") for e in errors], [20])
+                claim.refresh_from_db()
+                self.assertEqual(claim.status, status)
+                self.assertIsNone(claim.audit_user_id_submit)
+                self.assertFalse(
+                    Claim.objects.filter(legacy_id=claim.id).exists(),
+                    "a refused submission must not write a history row",
+                )
+
     def _get_test_dict(self, code=None, start_date=None, end_date=None):
         return {
             "health_facility_id": self.test_claim.health_facility_id,
