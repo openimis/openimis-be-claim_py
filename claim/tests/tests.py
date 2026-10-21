@@ -498,7 +498,8 @@ class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):
         - additional_filters selects status CHECKED (would match all without row sec).
         - Resulting queryset from decorator must contain only the claims from the user's district.
         """
-        # Locations: two districts (codes <=8 chars per model). D must have parent for UserDistrict queries in get_user_districts.
+        # Locations: two districts (codes <=8 chars per model).
+        # D must have parent for UserDistrict queries in get_user_districts.
         region_allowed = create_test_location(
             "R", custom_props={"code": "RA1", "name": "Allowed Region"}
         )
@@ -509,7 +510,8 @@ class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):
             "R", custom_props={"code": "RF2", "name": "Forbidden Region"}
         )
         district_forbidden = create_test_location(
-            "D", custom_props={"code": "DF2", "name": "Forbidden District for submit filter", "parent": region_forbidden}
+            "D",
+            custom_props={"code": "DF2", "name": "Forbidden District for submit filter", "parent": region_forbidden}
         )
 
         hf_allowed = create_test_health_facility(
@@ -712,7 +714,7 @@ class SubmitClaimsWithFilterDecoratorRowSecurityTest(TestCase):
             },
         )
 
-        hf_allowed = create_test_health_facility(
+        create_test_health_facility(
             code="HFS1", location_id=district_allowed.id
         )
         hf_forbidden = create_test_health_facility(

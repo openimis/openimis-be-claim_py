@@ -53,9 +53,6 @@ DJANGO_PERMS = {
 }
 
 
-
-
-
 _PERM_CFG = {
     "gql_query_claims_perms": ("claim", "query"),
     "gql_query_claim_officers_perms": ("claimOfficer", "query"),
@@ -76,8 +73,6 @@ _PERM_CFG = {
     "gql_mutation_delete_claims_perms": ("claim", "delete"),
     "claim_print_perms": ("claim", "print"),
 }
-
-
 
 
 RIGHTS = RightsDeclaration(MODULE_NAME, DJANGO_PERMS, _PERM_CFG)

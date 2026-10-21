@@ -9,7 +9,6 @@ from django.test import TestCase
 from claim.management.commands.seed_synthetic_health_data import (
     AUTOMATIC_REJECTION_RATE, CARE_TYPE_WEIGHTS, CLAIM_PROGRESS_WEIGHTS,
     MEDICAL_OFFICER_REJECTION_RATE, MEDICAL_OFFICER_REJECTION_REASON,
-    PROCESS_DELAY_RANGE_DAYS, SUBMIT_DELAY_RANGE_DAYS,
     SUBMIT_TO_VALUATED_RANGE_DAYS, BulkInsureeGenerator,
 )
 from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
@@ -252,7 +251,10 @@ class GenerateClaimsStatusDistributionTest(SeededRandomMixin, TestCase):
 
         self.assertAlmostEqual(auto_rejected.count() / sample_size, AUTOMATIC_REJECTION_RATE, delta=0.03)
         self.assertAlmostEqual(mo_rejected.count() / sample_size, MEDICAL_OFFICER_REJECTION_RATE, delta=0.02)
-        self.assertAlmostEqual(normal.count() / sample_size, 1 - AUTOMATIC_REJECTION_RATE - MEDICAL_OFFICER_REJECTION_RATE, delta=0.03)
+        self.assertAlmostEqual(
+            normal.count() / sample_size,
+            1 - AUTOMATIC_REJECTION_RATE - MEDICAL_OFFICER_REJECTION_RATE,
+            delta=0.03)
 
         # Every Medical Officer rejection carries the manual reason and a reviewer audit id.
         for claim in mo_rejected:
