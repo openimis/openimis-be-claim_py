@@ -28,6 +28,7 @@ from claim.validations import (
     REJECTION_REASON_INVALID_ITEM_OR_SERVICE,
     REJECTION_REASON_TARGET_DATE,
     REJECTION_REASON_MAX_CONSULTATIONS,
+    validate_target_date,
 )
 from django.test import TestCase
 from unittest import mock
@@ -185,6 +186,33 @@ class ValidationTest(TestCase):
     #     # tearDown
     #     service1.delete()
     #     claim.delete()
+
+    def test_validate_target_date_rejects_care_ending_after_claim_date(self):
+        # OP-3250: a claim saved before the entry check, or by another path, with
+        # care ending after the claim date is rejected on submission
+        day = datetime.now() - timedelta(days=3)
+        claim = create_test_claim(
+            custom_props={
+                "date_from": day,
+                "date_to": day + timedelta(days=2),
+                "date_claimed": day + timedelta(days=1),
+            },
+            product=self.product,
+        )
+        errors = validate_target_date(claim)
+        self.assertEqual([e["code"] for e in errors], [REJECTION_REASON_TARGET_DATE], errors)
+
+    def test_validate_target_date_accepts_care_ending_on_claim_date(self):
+        day = datetime.now() - timedelta(days=3)
+        claim = create_test_claim(
+            custom_props={
+                "date_from": day,
+                "date_to": day + timedelta(days=1),
+                "date_claimed": day + timedelta(days=1),
+            },
+            product=self.product,
+        )
+        self.assertEqual(validate_target_date(claim), [])
 
     def test_validate_pricelist_hf1(self):
         # When the claimitem points to a pricelist that doesn't correspond to the claim HF

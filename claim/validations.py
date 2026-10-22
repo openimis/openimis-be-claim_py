@@ -1694,6 +1694,8 @@ def validate_target_date(claim):
         # entry saves such a claim in Error, never Entered; this catches one
         # stored before that check, or by another path
         or (claim.date_to is not None and claim.date_to < claim.date_from)
+        # care ending after the claim date (OP-3250)
+        or (claim.date_to is not None and claim.date_to > claim.date_claimed)
     ):
         claim.reject(REJECTION_REASON_TARGET_DATE)
         errors += [

@@ -186,6 +186,9 @@ class ClaimSubmitError(Exception):
         7: "Invalid ItemCode",
         8: "Invalid ServiceCode",
         9: "Invalid Claim Admin",
+        10: "Start date is later than the claim date",
+        11: "End date is later than the claim date",
+        12: "Claim date is in the future",
     }
 
     def __init__(self, code, msg=None):
@@ -202,6 +205,9 @@ class ClaimSubmitError(Exception):
 # report the same code for the same mistake. They are not rejection reasons:
 # the claim is not rejected, it is saved with Claim.STATUS_ERROR.
 CLAIM_ENTRY_ERROR_DATE_TO_BEFORE_DATE_FROM = 4
+CLAIM_ENTRY_ERROR_DATE_FROM_AFTER_DATE_CLAIMED = 10
+CLAIM_ENTRY_ERROR_DATE_TO_AFTER_DATE_CLAIMED = 11
+CLAIM_ENTRY_ERROR_DATE_CLAIMED_IN_FUTURE = 12
 
 
 def _as_date(value):
@@ -219,25 +225,44 @@ def get_claim_field_errors(data):
     with field errors is saved with Claim.STATUS_ERROR rather than refused, so
     that what was entered is not lost for a typo.
     """
-    errors = []
     date_from = _as_date(data.get("date_from"))
     date_to = _as_date(data.get("date_to"))
-    if date_from and date_to and date_to < date_from:
-        errors.append(
-            {
-                "code": CLAIM_ENTRY_ERROR_DATE_TO_BEFORE_DATE_FROM,
-                "message": ClaimSubmitError.ERROR_CODES[
-                    CLAIM_ENTRY_ERROR_DATE_TO_BEFORE_DATE_FROM
-                ],
-            }
-        )
-    return errors
+    date_claimed = _as_date(data.get("date_claimed"))
+    # the care is given before it is claimed, and a claim is not made in
+    # advance: the claim form enforces the same rule (OP-3250)
+    failed = [
+        (
+            CLAIM_ENTRY_ERROR_DATE_TO_BEFORE_DATE_FROM,
+            date_from and date_to and date_to < date_from,
+        ),
+        (
+            CLAIM_ENTRY_ERROR_DATE_FROM_AFTER_DATE_CLAIMED,
+            date_from and date_claimed and date_from > date_claimed,
+        ),
+        (
+            CLAIM_ENTRY_ERROR_DATE_TO_AFTER_DATE_CLAIMED,
+            date_to and date_claimed and date_to > date_claimed,
+        ),
+        (
+            CLAIM_ENTRY_ERROR_DATE_CLAIMED_IN_FUTURE,
+            date_claimed and date_claimed > datetime.date.today(),
+        ),
+    ]
+    return [
+        {"code": code, "message": ClaimSubmitError.ERROR_CODES[code]}
+        for code, error in failed
+        if error
+    ]
 
 
 def get_saved_claim_field_errors(claim):
     """Return the field errors of a saved claim, each with its uuid as detail."""
     errors = get_claim_field_errors(
-        {"date_from": claim.date_from, "date_to": claim.date_to}
+        {
+            "date_from": claim.date_from,
+            "date_to": claim.date_to,
+            "date_claimed": claim.date_claimed,
+        }
     )
     for error in errors:
         error["detail"] = str(claim.uuid)
