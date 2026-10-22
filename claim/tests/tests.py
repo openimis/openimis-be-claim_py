@@ -464,7 +464,10 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         self.assertIsNotNone(edges[1]['node']['validityTo'])
         self.assertEqual(edges[1]['node']['status'], Claim.STATUS_CHECKED)
 
-    def _claim_mutation(self, mutation, mutation_id, code, date_from, date_to, extra=""):
+    def _claim_mutation(self, mutation, mutation_id, code, date_from, date_to, extra="", date_claimed=None):
+        # by default the claim is made on the last care day, which keeps the
+        # visit within the claim date (OP-3250)
+        date_claimed = date_claimed or max(date_from, date_to)
         return self.query(
             f"""
             mutation {{
@@ -479,7 +482,7 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
                     dateFrom: "{date_from}"
                     dateTo: "{date_to}"
                     icdId: {self.icd.id}
-                    dateClaimed: "{date_from}"
+                    dateClaimed: "{date_claimed}"
                     healthFacilityId: {self.claim_admin.health_facility.id}
                     visitType: "O"
                     services: [
@@ -527,6 +530,57 @@ class ClaimGraphQLTestCase(openIMISGraphQLTestCase):
         self.assertEqual(claim.services.filter(validity_to__isnull=True).count(), 1)
         self.assertEqual([e.get("code") for e in errors], [4], errors)
         self.assertEqual(errors[0].get("detail"), str(claim.uuid))
+
+    def _assert_saved_in_error(self, code, mutation_id, expected_codes):
+        errors = self._mutation_errors(mutation_id)
+        claim = Claim.objects.filter(code=code, validity_to__isnull=True).first()
+        self.assertIsNotNone(claim, "the claim must be saved despite the field error")
+        self.assertEqual(claim.status, Claim.STATUS_ERROR, "claim status should be Error (0)")
+        self.assertEqual(sorted(e.get("code") for e in errors), expected_codes, errors)
+        self.assertTrue(all(e.get("detail") == str(claim.uuid) for e in errors), errors)
+
+    def test_create_claim_start_after_claim_date_saved_in_error(self):
+        # OP-3250: the claim form keeps the care dates within the claim date;
+        # the API applies the same rule (entry error code 10)
+        mutation_id = "6a3f3a5e-6a51-4d0e-9f53-0b4f0c3250a1"
+        self._claim_mutation(
+            "createClaim", mutation_id, "fut-s-claim", "2023-12-06", "2023-12-06",
+            extra="autogenerate: false", date_claimed="2023-12-05",
+        )
+        # the care also ends after the claim date
+        self._assert_saved_in_error("fut-s-claim", mutation_id, [10, 11])
+
+    def test_create_claim_end_after_claim_date_saved_in_error(self):
+        # OP-3250: care ending after the claim date (entry error code 11)
+        mutation_id = "6a3f3a5e-6a51-4d0e-9f53-0b4f0c3250a2"
+        self._claim_mutation(
+            "createClaim", mutation_id, "fut-e-claim", "2023-12-05", "2023-12-07",
+            extra="autogenerate: false", date_claimed="2023-12-06",
+        )
+        self._assert_saved_in_error("fut-e-claim", mutation_id, [11])
+
+    def test_create_claim_claimed_in_future_saved_in_error(self):
+        # OP-3250: a claim cannot be made for a day still to come (entry error code 12)
+        tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        mutation_id = "6a3f3a5e-6a51-4d0e-9f53-0b4f0c3250a3"
+        self._claim_mutation(
+            "createClaim", mutation_id, "fut-c-claim", tomorrow, tomorrow,
+            extra="autogenerate: false",
+        )
+        self._assert_saved_in_error("fut-c-claim", mutation_id, [12])
+
+    def test_create_claim_for_care_today_claimed_today_is_entered(self):
+        # OP-3250: the boundary is allowed: care given and claimed today
+        today = datetime.date.today().isoformat()
+        mutation_id = "6a3f3a5e-6a51-4d0e-9f53-0b4f0c3250a4"
+        self._claim_mutation(
+            "createClaim", mutation_id, "now-claim", today, today,
+            extra="autogenerate: false",
+        )
+        errors = self._mutation_errors(mutation_id)
+        claim = Claim.objects.get(code="now-claim", validity_to__isnull=True)
+        self.assertEqual(errors, [])
+        self.assertEqual(claim.status, Claim.STATUS_ENTERED)
 
     def test_update_claim_in_error_with_valid_dates_becomes_entered(self):
         # OP-3239: correcting a claim in Error is a plain update, and moves it to
