@@ -55,6 +55,8 @@ from product.test_helpers import (
 )
 from copy import copy
 from claim.validations import REJECTION_REASON_FAMILY, REJECTION_REASON_NO_COVERAGE
+from claim.validations import get_pricelist_detail
+from medical_pricelist.models import ItemsPricelistDetail
 
 import uuid
 
@@ -1658,3 +1660,44 @@ class ValidationTest(TestCase):
         errors = validate_claim(claim, True)
 
         self.assertIn(REJECTION_REASON_MAX_CONSULTATIONS, [e["code"] for e in errors])
+
+
+class PricelistDetailAtDateTest(TestCase):
+    """
+    OP-3253: processing (process_dedrem -> get_pricelist_detail) must find the same
+    price-list row as validation, which compares validity by day (filter_validity).
+    A row saved during the care day used to be compared with its midnight and missed.
+    """
+
+    def setUp(self):
+        self.claim = create_test_claim()
+        self.item = create_test_item("D")
+        self.claimitem = create_test_claimitem(self.claim, "D", custom_props={"item_id": self.item.id})
+
+    def _detail(self, target_date):
+        return get_pricelist_detail(self.claim, self.claimitem, target_date, detail_is_item=True)
+
+    def test_row_saved_on_the_care_day_is_found(self):
+        detail = add_item_to_hf_pricelist(
+            self.item, self.claim.health_facility, custom_props={"validity_from": datetime.now()})
+        self.assertEqual(self._detail(date.today()), detail)
+        self.assertEqual(self._detail(datetime.now()), detail)
+
+    def test_row_saved_after_the_care_day_is_not_found(self):
+        add_item_to_hf_pricelist(
+            self.item, self.claim.health_facility, custom_props={"validity_from": datetime.now()})
+        self.assertIsNone(self._detail(date.today() - timedelta(days=1)))
+
+    def test_version_valid_on_the_care_day_is_picked(self):
+        current = add_item_to_hf_pricelist(
+            self.item, self.claim.health_facility, custom_props={"validity_from": datetime.now()})
+        replaced = ItemsPricelistDetail.objects.create(
+            items_pricelist=current.items_pricelist,
+            item=self.item,
+            validity_from=datetime.now() - timedelta(days=30),
+            validity_to=datetime.now() - timedelta(days=2),
+            legacy_id=current.id,
+            audit_user_id=1,
+        )
+        self.assertEqual(self._detail(date.today() - timedelta(days=10)), replaced)
+        self.assertEqual(self._detail(date.today()), current)

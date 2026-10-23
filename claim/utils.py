@@ -1,3 +1,4 @@
+import datetime
 import math
 from claim.models import (
     Claim,
@@ -321,7 +322,12 @@ def __get_current_nepali_fiscal_year_code():
 
 
 def get_queryset_valid_at_date(queryset, date):
-    filtered_qs = queryset.filter(validity_to__gte=date, validity_from__lte=date)
+    # Validity is a timestamp and `date` a business date: compare with the end of
+    # that day, as core.utils.filter_validity does for validation, so that a row
+    # saved during the day is valid on it. Against the date alone, Django compared
+    # with its midnight and processing missed the row validation had found (OP-3253).
+    end_of_day = datetime.datetime(date.year, date.month, date.day, 23, 59, 59)
+    filtered_qs = queryset.filter(validity_to__gte=end_of_day, validity_from__lte=end_of_day)
     if filtered_qs.exists():
         return filtered_qs
-    return queryset.filter(validity_from__lte=date, validity_to__isnull=True)
+    return queryset.filter(validity_from__lte=end_of_day, validity_to__isnull=True)
