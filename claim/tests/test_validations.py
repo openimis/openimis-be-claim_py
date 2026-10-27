@@ -1701,3 +1701,69 @@ class PricelistDetailAtDateTest(TestCase):
         )
         self.assertEqual(self._detail(date.today() - timedelta(days=10)), replaced)
         self.assertEqual(self._detail(date.today()), current)
+
+
+class ProcessCheckedClaimDateProcessedTest(TestCase):
+    """A checked claim gets date_processed when it is processed, whether it
+    ends PROCESSED (relative prices) or VALUATED (fixed prices)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.user = create_test_interactive_user()
+
+    def _create_checked_claim(self, date_processed=None):
+        insuree = create_test_insuree()
+        product = create_test_product("DTPROC", custom_props={})
+        create_test_policy2(product, insuree, link=True)
+        service = create_test_service("V", custom_props={})
+        item = create_test_item("D", custom_props={})
+        claim = create_test_claim({"insuree_id": insuree.id})
+        claim.health_facility.care_type = claim.health_facility.CARE_TYPE_BOTH
+        claim.health_facility.save()
+        create_test_claimservice(
+            claim, custom_props={"service_id": service.id}, product=product
+        )
+        create_test_claimitem(
+            claim, "D", custom_props={"item_id": item.id}, product=product
+        )
+        errors = validate_claim(claim, True)
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        claim.status = Claim.STATUS_CHECKED
+        claim.date_processed = date_processed
+        claim.save()
+        return claim
+
+    def test_checked_claim_valuated_sets_date_processed(self):
+        claim = self._create_checked_claim()
+
+        errors = processing_claim(claim, self.user, is_process=True)
+
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_VALUATED)
+        self.assertEqual(claim.date_processed, date.today())
+
+    def test_checked_claim_with_relative_prices_sets_date_processed(self):
+        claim = self._create_checked_claim()
+        ClaimItem.objects.filter(claim=claim).update(
+            price_origin=ProductItemOrService.ORIGIN_RELATIVE
+        )
+
+        errors = processing_claim(claim, self.user, is_process=True)
+
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_PROCESSED)
+        self.assertEqual(claim.date_processed, date.today())
+
+    def test_checked_claim_keeps_existing_date_processed(self):
+        earlier = date.today() - timedelta(days=10)
+        claim = self._create_checked_claim(date_processed=earlier)
+
+        errors = processing_claim(claim, self.user, is_process=True)
+
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_VALUATED)
+        self.assertEqual(claim.date_processed, earlier)

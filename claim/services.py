@@ -802,10 +802,12 @@ def set_claim_processed_or_valuated(claim, errors, user):
             claim.status = Claim.STATUS_REJECTED
         if claim.status == Claim.STATUS_CHECKED:
             claim.approved = approved_amount(claim)
+            # A claim is processed before it is valuated: record the processing
+            # date on both outcomes, keeping one that is already set.
+            claim.date_processed = claim.date_processed or datetime.date.today()
             if with_relative_prices(claim):
                 claim.status = Claim.STATUS_PROCESSED
                 claim.process_stamp = datetime.datetime.now()
-                claim.date_processed = datetime.date.today()
             else:
                 claim.status = Claim.STATUS_VALUATED
                 claim.valuated = claim.approved
