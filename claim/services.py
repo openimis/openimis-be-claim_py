@@ -979,3 +979,56 @@ def update_claims_dedrems(uuids, user, claims=None):
             _("claim.validation.id_does_not_exist") % {"id": ",".join(remaining_uuid)}
         )
     return errors
+
+
+def handle_claim_subscription_notification(sender, **kwargs):
+    """
+    Notify FHIR subscribers after a successful GraphQL claim creation.
+
+    The FHIR module is optional, so its dependencies are imported only when
+    this hook runs. Notification failures must not fail an otherwise successful
+    claim mutation.
+    """
+    try:
+        from api_fhir_r4.configurations.R4ClaimConfig import R4ClaimConfig
+        from api_fhir_r4.converters.claimResponseConverter import (
+            ClaimResponseConverter,
+        )
+        from api_fhir_r4.signals import notify_subscribers
+
+        if not R4ClaimConfig.get_subscribe_claim_signal():
+            logger.debug("Claim subscription is disabled, skipping notification")
+            return
+
+        mutation_data = kwargs.get("data", {})
+        claim_code = mutation_data.get("code")
+        user = kwargs.get("user")
+
+        if not claim_code:
+            logger.warning("No claim code found in mutation data for notification")
+            return
+        if not user:
+            logger.warning("No user found in mutation data for notification")
+            return
+
+        claim = Claim.objects.filter(
+            code=claim_code,
+            validity_to__isnull=True,
+        ).first()
+        if not claim:
+            logger.warning("Could not find created claim with code: %s", claim_code)
+            return
+
+        logger.info(
+            "Processing subscription for claim %s on behalf of user %s",
+            claim.uuid,
+            user.username,
+        )
+        notify_subscribers(
+            claim,
+            ClaimResponseConverter(user=user),
+            "Claim",
+            None,
+        )
+    except Exception as e:
+        logger.error("Error while processing Claim Subscription from web", exc_info=e)
