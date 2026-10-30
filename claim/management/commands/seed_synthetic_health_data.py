@@ -29,6 +29,7 @@ import math
 import random
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -171,8 +172,10 @@ class BulkInsureeGenerator:
         seed=None,
         audit_user_id=-1,
         optimize_database=True,
+        claim_chunk_size=2000,
     ):
         self.batch_size = batch_size
+        self.claim_chunk_size = claim_chunk_size
         self.random = random.Random(seed)
         self.data_gen = DataGenerator(rng=self.random, seed=seed)
         self.stdout = stdout
@@ -271,7 +274,6 @@ class BulkInsureeGenerator:
                 created_objects.extend(created_batch)
             progress = (len(created_objects) / total) * 100
             self.write(f"  Progress: {len(created_objects):,}/{total:,} ({progress:.1f}%) {description}")
-            gc.collect()
         return created_objects
 
     def _generate_family_sizes(self, num_families, num_members, family_size_weights):
@@ -653,23 +655,18 @@ class BulkInsureeGenerator:
             "approved_amount": approved_price * quantity,
         }
 
-    def _generate_claims(
+    def _build_claim_batch(
         self,
-        all_insurees,
+        insurees,
         num_claims_per_insuree,
         policy_by_family,
         claims_per_insuree=None,
         realistic_claim_outcomes=False,
     ):
-        if claims_per_insuree is None:
-            description = f"{num_claims_per_insuree} claims for each"
-        else:
-            description = f"an average of {claims_per_insuree:g} claims for each"
-        self.write(
-            f"\n=== Generating {description} of {len(all_insurees):,} insurees ==="
-        )
         claims_to_create = []
-        for insuree in all_insurees:
+        claim_items_to_create = []
+        claim_services_to_create = []
+        for insuree in insurees:
             earliest, latest = self._get_claim_date_range(insuree, policy_by_family)
             health_facility = self._select_claim_health_facility(insuree)
             claim_count = self._get_claim_count(
@@ -752,122 +749,207 @@ class BulkInsureeGenerator:
                     claimed=0,
                 )
                 claim._synthetic_outcome = synthetic_outcome
+                item_details, service_details = self._build_claim_details(
+                    claim,
+                    policy_by_family,
+                    realistic_claim_outcomes,
+                )
                 claims_to_create.append(claim)
+                claim_items_to_create.extend(item_details)
+                claim_services_to_create.extend(service_details)
 
-        created_claims = self._bulk_create_with_progress(Claim, claims_to_create, "claims")
+        return claims_to_create, claim_items_to_create, claim_services_to_create
 
-        claim_items_to_create, claim_services_to_create = [], []
-        claim_totals = {c.id: Decimal(0) for c in created_claims}
-        claim_approved_totals = {c.id: Decimal(0) for c in created_claims}
+    def _build_claim_details(
+        self,
+        claim,
+        policy_by_family,
+        realistic_claim_outcomes,
+    ):
+        policy = policy_by_family.get(claim.insuree.family_id)
+        product = policy.product if policy else None
+        synthetic_outcome = getattr(claim, "_synthetic_outcome", None)
+        is_rejected = claim.status == Claim.STATUS_REJECTED
+        default_status = (
+            ClaimDetail.STATUS_REJECTED
+            if is_rejected
+            else ClaimDetail.STATUS_PASSED
+        )
+        default_rejection_reason = claim.rejection_reason if is_rejected else None
+        default_qty_approved = Decimal(0) if is_rejected else None
+        claimed_total = Decimal(0)
+        approved_total = Decimal(0)
+        item_details = []
+        service_details = []
 
-        for claim in created_claims:
-            policy = policy_by_family.get(claim.insuree.family_id)
-            product = policy.product if policy else None
-            synthetic_outcome = getattr(claim, "_synthetic_outcome", None)
-            # Rejected claims (automatic or Medical Officer) must have their items/services
-            # marked as rejected too, with qty_approved cleared - mirrors claim.validations
-            # automatic checks (see validate_assign_prod_elt: qty_approved=0 on rejection).
-            is_rejected = claim.status == Claim.STATUS_REJECTED
-            detail_status = ClaimDetail.STATUS_REJECTED if is_rejected else ClaimDetail.STATUS_PASSED
-            detail_rejection_reason = claim.rejection_reason if is_rejected else None
-            detail_qty_approved = Decimal(0) if is_rejected else None
+        for item_index in range(self.random.randint(1, 4)):
+            price = Decimal(self.random.randint(500, 15000)) / 100
+            quantity = Decimal(self.random.randint(1, 5))
+            detail_fields = self._get_claim_detail_fields(
+                synthetic_outcome,
+                price,
+                quantity,
+                ITEM_REJECTION_RATE,
+                default_status,
+                default_qty_approved,
+                default_rejection_reason,
+                force_rejected=(
+                    synthetic_outcome == "PARTIAL" and item_index == 0
+                ),
+            )
+            item_details.append(
+                ClaimItem(
+                    claim=claim,
+                    item=self.random.choice(self.items),
+                    product=product,
+                    policy=policy,
+                    qty_provided=quantity,
+                    price_asked=price,
+                    audit_user_id=self.audit_user_id,
+                    availability=True,
+                    **detail_fields["model_fields"],
+                )
+            )
+            claimed_total += price * quantity
+            approved_total += detail_fields["approved_amount"]
 
-            # Claim composition varies to avoid identical item/service profiles.
-            for item_index in range(self.random.randint(1, 4)):  # 1-4 items per claim
-                price = Decimal(self.random.randint(500, 15000)) / 100
-                qty = Decimal(self.random.randint(1, 5))
-                if synthetic_outcome:
-                    detail_fields = self._get_realistic_detail_fields(
-                        synthetic_outcome,
-                        price,
-                        qty,
-                        ITEM_REJECTION_RATE,
-                        force_rejected=(
-                            synthetic_outcome == "PARTIAL" and item_index == 0
-                        ),
-                        claim_rejection_reason=(
-                            claim.rejection_reason
-                            if synthetic_outcome == "REJECTED"
-                            else None
-                        ),
-                    )
-                    detail_status = detail_fields["status"]
-                    detail_qty_approved = detail_fields["qty_approved"]
-                    detail_rejection_reason = detail_fields["rejection_reason"]
-                    price_adjusted = detail_fields["price_adjusted"]
-                    price_approved = detail_fields["price_approved"]
-                    price_valuated = detail_fields["price_valuated"]
-                    claim_approved_totals[claim.id] += detail_fields[
-                        "approved_amount"
-                    ]
-                else:
-                    price_adjusted = price_approved = price_valuated = None
-                claim_items_to_create.append(ClaimItem(
-                    claim=claim, item=self.random.choice(self.items), status=detail_status, qty_provided=qty,
-                    qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
-                    price_asked=price, price_adjusted=price_adjusted,
-                    price_approved=price_approved, price_valuated=price_valuated,
-                    product=product, policy=policy,
-                    audit_user_id=self.audit_user_id, availability=True
-                ))
-                claim_totals[claim.id] += price * qty
+        for service_index in range(self.random.randint(1, 3)):
+            price = Decimal(self.random.randint(5000, 50000)) / 100
+            quantity = Decimal(1)
+            detail_fields = self._get_claim_detail_fields(
+                synthetic_outcome,
+                price,
+                quantity,
+                SERVICE_REJECTION_RATE,
+                default_status,
+                default_qty_approved,
+                default_rejection_reason,
+                force_approved=(
+                    synthetic_outcome == "PARTIAL" and service_index == 0
+                ),
+            )
+            service_details.append(
+                ClaimService(
+                    claim=claim,
+                    service=self.random.choice(self.services),
+                    product=product,
+                    policy=policy,
+                    qty_provided=quantity,
+                    price_asked=price,
+                    audit_user_id=self.audit_user_id,
+                    **detail_fields["model_fields"],
+                )
+            )
+            claimed_total += price * quantity
+            approved_total += detail_fields["approved_amount"]
 
-            for service_index in range(self.random.randint(1, 3)):  # 1-3 services per claim
-                price = Decimal(self.random.randint(5000, 50000)) / 100
-                qty = Decimal(1)
-                if synthetic_outcome:
-                    detail_fields = self._get_realistic_detail_fields(
-                        synthetic_outcome,
-                        price,
-                        qty,
-                        SERVICE_REJECTION_RATE,
-                        force_approved=(
-                            synthetic_outcome == "PARTIAL" and service_index == 0
-                        ),
-                        claim_rejection_reason=(
-                            claim.rejection_reason
-                            if synthetic_outcome == "REJECTED"
-                            else None
-                        ),
-                    )
-                    detail_status = detail_fields["status"]
-                    detail_qty_approved = detail_fields["qty_approved"]
-                    detail_rejection_reason = detail_fields["rejection_reason"]
-                    price_adjusted = detail_fields["price_adjusted"]
-                    price_approved = detail_fields["price_approved"]
-                    price_valuated = detail_fields["price_valuated"]
-                    claim_approved_totals[claim.id] += detail_fields[
-                        "approved_amount"
-                    ]
-                else:
-                    price_adjusted = price_approved = price_valuated = None
-                claim_services_to_create.append(ClaimService(
-                    claim=claim, service=self.random.choice(self.services), status=detail_status, qty_provided=qty,
-                    qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
-                    price_asked=price, price_adjusted=price_adjusted,
-                    price_approved=price_approved, price_valuated=price_valuated,
-                    product=product, policy=policy,
-                    audit_user_id=self.audit_user_id
-                ))
-                claim_totals[claim.id] += price * qty
-
-        self._bulk_create_with_progress(ClaimItem, claim_items_to_create, "claim items")
-        self._bulk_create_with_progress(ClaimService, claim_services_to_create, "claim services")
-
-        self.write(f"Bulk updating {len(created_claims):,} claims with calculated totals...")
-        for claim in created_claims:
-            claim.claimed = claim_totals[claim.id]
-            if realistic_claim_outcomes:
-                claim.approved = claim_approved_totals[claim.id]
-                claim.valuated = claim.approved
-        fields_to_update = ["claimed"]
+        claim.claimed = claimed_total
         if realistic_claim_outcomes:
-            fields_to_update.extend(["approved", "valuated"])
-        Claim.objects.bulk_update(
-            created_claims, fields_to_update, batch_size=self.batch_size
+            claim.approved = approved_total
+            claim.valuated = approved_total
+        return item_details, service_details
+
+    def _get_claim_detail_fields(
+        self,
+        synthetic_outcome,
+        price,
+        quantity,
+        rejection_rate,
+        default_status,
+        default_qty_approved,
+        default_rejection_reason,
+        force_rejected=False,
+        force_approved=False,
+    ):
+        if synthetic_outcome:
+            fields = self._get_realistic_detail_fields(
+                synthetic_outcome,
+                price,
+                quantity,
+                rejection_rate,
+                force_rejected=force_rejected,
+                force_approved=force_approved,
+                claim_rejection_reason=(
+                    default_rejection_reason
+                    if synthetic_outcome == "REJECTED"
+                    else None
+                ),
+            )
+            approved_amount = fields.pop("approved_amount")
+            return {"model_fields": fields, "approved_amount": approved_amount}
+
+        return {
+            "model_fields": {
+                "status": default_status,
+                "qty_approved": default_qty_approved,
+                "rejection_reason": default_rejection_reason,
+                "price_adjusted": None,
+                "price_approved": None,
+                "price_valuated": None,
+            },
+            "approved_amount": Decimal(0),
+        }
+
+    def _generate_claims(
+        self,
+        all_insurees,
+        num_claims_per_insuree,
+        policy_by_family,
+        claims_per_insuree=None,
+        realistic_claim_outcomes=False,
+    ):
+        if claims_per_insuree is None:
+            description = f"{num_claims_per_insuree} claims for each"
+        else:
+            description = f"an average of {claims_per_insuree:g} claims for each"
+        total_insurees = len(all_insurees)
+        total_chunks = math.ceil(total_insurees / self.claim_chunk_size)
+        self.write(
+            f"\n=== Generating {description} of {total_insurees:,} insurees "
+            f"in {total_chunks:,} chunks ==="
         )
 
-        return len(created_claims), len(claim_items_to_create), len(claim_services_to_create)
+        claim_count = item_count = service_count = 0
+        for start in range(0, total_insurees, self.claim_chunk_size):
+            insuree_chunk = all_insurees[start:start + self.claim_chunk_size]
+            chunk_number = start // self.claim_chunk_size + 1
+            with transaction.atomic():
+                claims, items, services = self._build_claim_batch(
+                    insuree_chunk,
+                    num_claims_per_insuree,
+                    policy_by_family,
+                    claims_per_insuree=claims_per_insuree,
+                    realistic_claim_outcomes=realistic_claim_outcomes,
+                )
+                created_claims = self._bulk_create_with_progress(
+                    Claim, claims, f"claims (chunk {chunk_number}/{total_chunks})"
+                )
+                for detail in items + services:
+                    detail.claim_id = detail.claim.id
+                self._bulk_create_with_progress(
+                    ClaimItem,
+                    items,
+                    f"claim items (chunk {chunk_number}/{total_chunks})",
+                )
+                self._bulk_create_with_progress(
+                    ClaimService,
+                    services,
+                    f"claim services (chunk {chunk_number}/{total_chunks})",
+                )
+
+            claim_count += len(created_claims)
+            item_count += len(items)
+            service_count += len(services)
+            processed = min(start + len(insuree_chunk), total_insurees)
+            self.write(
+                f"Claim chunks: {chunk_number:,}/{total_chunks:,}; "
+                f"insurees: {processed:,}/{total_insurees:,}; "
+                f"claims: {claim_count:,}"
+            )
+            del claims, created_claims, items, services
+            gc.collect()
+
+        return claim_count, item_count, service_count
 
     def generate_bulk_data(
         self,
@@ -1019,6 +1101,12 @@ class Command(BaseCommand):
         )
         parser.add_argument('--batch-size', type=int, default=2000, help='Batch size for bulk operations.')
         parser.add_argument(
+            '--claim-chunk-size',
+            type=int,
+            default=2000,
+            help='Number of insurees whose claims are held in memory at once.',
+        )
+        parser.add_argument(
             '--seed',
             type=int,
             help='Seed for repeatable random and Faker values.',
@@ -1033,6 +1121,11 @@ class Command(BaseCommand):
             '--no-db-optimization',
             action='store_true',
             help='Do not apply PostgreSQL session settings for bulk inserts.',
+        )
+        parser.add_argument(
+            '--single-transaction',
+            action='store_true',
+            help='Wrap the entire generation in one transaction. Avoid for large datasets.',
         )
         parser.add_argument('--no-confirm', action='store_true', help='Skip confirmation prompt.')
 
@@ -1109,6 +1202,9 @@ class Command(BaseCommand):
         batch_size = options['batch_size']
         if batch_size < 1:
             raise CommandError("Batch size must be at least 1.")
+        claim_chunk_size = options['claim_chunk_size']
+        if claim_chunk_size < 1:
+            raise CommandError("Claim chunk size must be at least 1.")
         if config['families'] > 10000 and batch_size < 4000:
             batch_size = 5000
             self.stdout.write(self.style.WARNING(f"Auto-adjusted batch size to {batch_size} for large dataset"))
@@ -1144,7 +1240,8 @@ class Command(BaseCommand):
         if claims_per_insuree > 0:
             self.stdout.write(
                 f"Claims per insuree: {claims_per_insuree:g}\n"
-                f"Estimated total claims: {total_claims:,}"
+                f"Estimated total claims: {total_claims:,}\n"
+                f"Claim chunk size: {claim_chunk_size:,} insurees"
             )
 
         if not options['no_confirm']:
@@ -1152,13 +1249,19 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR("Operation cancelled."))
                 return
 
-        with transaction.atomic():
+        generation_context = (
+            transaction.atomic()
+            if options['single_transaction']
+            else nullcontext()
+        )
+        with generation_context:
             generator = BulkInsureeGenerator(
                 batch_size=batch_size,
                 stdout=self.stdout,
                 seed=options['seed'],
                 audit_user_id=options['audit_user_id'],
                 optimize_database=not options['no_db_optimization'],
+                claim_chunk_size=claim_chunk_size,
             )
             results = generator.generate_bulk_data(
                 config['families'],

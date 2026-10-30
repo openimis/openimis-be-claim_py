@@ -33,6 +33,7 @@ round-robin products, and realistic claim outcomes.
 python manage.py seed_synthetic_health_data \
   --country nepal \
   --families 1000 \
+  --claim-chunk-size 2000 \
   --seed 2026 \
   --no-confirm
 ```
@@ -69,6 +70,34 @@ python manage.py seed_synthetic_health_data \
 All weight objects must contain positive values that sum to `1.0`. Passing
 `--members` overrides weighted family sizes. Passing `--claims` overrides the
 average claim count. `--seed` makes Faker and all distributions repeatable.
+
+## Large datasets
+
+Claims are generated in bounded insuree chunks. Each chunk creates its claims,
+items, and services and then releases those Python objects before continuing.
+The default `--claim-chunk-size` is 2,000 insurees. Reduce it when memory is
+limited; increase it cautiously when the database and application have enough
+memory.
+
+```shell
+python manage.py seed_synthetic_health_data \
+  --country nepal \
+  --families 50000 \
+  --batch-size 5000 \
+  --claim-chunk-size 1000 \
+  --seed 2026 \
+  --no-confirm
+```
+
+Every claim chunk is transactional, so a failure cannot leave half of that
+chunk in the database. Completed chunks and earlier family, policy, and
+insuree stages remain committed. `--single-transaction` restores full-command
+rollback for smaller datasets, but it creates a long-running database
+transaction and is not recommended for the 50,000-family scenario.
+
+The generator intentionally uses sequential chunks. Python threads would make
+Django connection management and seeded output more complex, while concurrent
+inserts can contend for the same PostgreSQL tables and indexes.
 
 The command requires active locations, health facilities, products, officers,
 diagnoses, medical items, and medical services. Every generated claim receives

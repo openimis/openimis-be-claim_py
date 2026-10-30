@@ -319,6 +319,7 @@ class GenerateClaimsTest(SimpleTestCase):
         self.generator.items = [Item(id=1)]
         self.generator.services = [Service(id=1)]
         self.created = {}
+        self.claim_batch_sizes = []
 
     def test_claims_are_coherent(self):
         results = self._generate(250)
@@ -465,11 +466,35 @@ class GenerateClaimsTest(SimpleTestCase):
                     {ClaimDetail.STATUS_PASSED, ClaimDetail.STATUS_REJECTED},
                 )
 
-    def _generate(self, count, realistic_claim_outcomes=False):
+    def test_claims_and_details_are_created_in_bounded_chunks(self):
+        self.generator.claim_chunk_size = 2
+        insurees = [
+            Insuree(
+                id=index,
+                family_id=self.insuree.family_id,
+                health_facility=self.health_facility,
+            )
+            for index in range(1, 6)
+        ]
+
+        results = self._generate(3, insurees=insurees)
+
+        self.assertEqual(results[0], 15)
+        self.assertEqual(self.claim_batch_sizes, [6, 6, 3])
+        self.assertEqual(len(self.created[Claim]), 15)
+
+    def _generate(
+        self,
+        count,
+        realistic_claim_outcomes=False,
+        insurees=None,
+    ):
         next_ids = {Claim: 1, ClaimItem: 1, ClaimService: 1}
 
         def capture(model_class, objects, description):
             del description
+            if model_class is Claim:
+                self.claim_batch_sizes.append(len(objects))
             self.created.setdefault(model_class, []).extend(objects)
             for obj in objects:
                 obj.id = next_ids[model_class]
@@ -478,9 +503,9 @@ class GenerateClaimsTest(SimpleTestCase):
 
         with mock.patch.object(
             self.generator, "_bulk_create_with_progress", side_effect=capture
-        ), mock.patch.object(Claim.objects, "bulk_update"):
+        ):
             return self.generator._generate_claims(
-                [self.insuree],
+                insurees or [self.insuree],
                 count,
                 {self.insuree.family_id: self.policy},
                 realistic_claim_outcomes=realistic_claim_outcomes,
