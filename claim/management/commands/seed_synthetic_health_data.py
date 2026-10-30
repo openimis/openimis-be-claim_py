@@ -9,7 +9,6 @@ Should NOT be used in production with real patient data
 Django Management Command for Bulk Synthetic Data Generation
 
 
-TODO: to generate this data more realistic and diversion, based on HF, location, Claim, Family that looks more realistic approach
 Usage:
     # Generate 1000 families with 4 members each, and 2 claims per insuree
     python manage.py seed_synthetic_health_data --families 1000 --members 4 --claims 2
@@ -19,10 +18,14 @@ Usage:
 
     # Use a preset for medium size data generation and skip the confirmation prompt
     python manage.py seed_synthetic_health_data --preset medium --claims 1 --no-confirm
-    #preset contains large, medium and small
+
+    # Use weighted distributions and realistic claim outcomes for Nepal
+    python manage.py seed_synthetic_health_data --country nepal --no-confirm
 """
 
 import gc
+import json
+import math
 import random
 import time
 import uuid
@@ -35,6 +38,14 @@ from django.utils import timezone
 from faker import Faker
 # Local app imports
 from claim.models import Claim, ClaimDetail, ClaimItem, ClaimService
+from claim.management.commands.synthetic_data_config import (
+    CLAIM_OUTCOME_WEIGHTS,
+    ITEM_REJECTION_RATE,
+    PRICE_REDUCTION_RANGE,
+    REALISTIC_COUNTRY_PRESETS,
+    SERVICE_REJECTION_RATE,
+    validate_realistic_config,
+)
 from claim.validations import (
     REJECTION_REASON_CARE_TYPE, REJECTION_REASON_CATEGORY_LIMITATION,
     REJECTION_REASON_FAMILY, REJECTION_REASON_FREQUENCY_FAILURE,
@@ -178,22 +189,28 @@ class BulkInsureeGenerator:
         else:
             print(message)
 
-    def setup_reference_data(self, generate_claims=False):
+    def setup_reference_data(
+        self, generate_claims=False, population_weighted_locations=False
+    ):
         """Cache reference data to avoid repeated DB queries"""
         self.write("Loading and setting up reference data...")
-        # validity_to__isnull=True selects only currently-valid rows (openIMIS VersionedModel convention):
-        # a non-null validity_to means the row was superseded/deactivated and must not be reused for new claims.
         self.genders = list(
-            Gender.objects.filter(validity_to__isnull=True).order_by("pk")
+            Gender.objects.order_by("pk")
         ) or list(Gender.objects.bulk_create([Gender(code="M"), Gender(code="F")]))
         self.family_types = list(
-            FamilyType.objects.filter(validity_to__isnull=True).order_by("pk")
+            FamilyType.objects.order_by("pk")
         ) or list(
             FamilyType.objects.bulk_create([FamilyType(code="N", type="Nuclear")])
         )
-        self.locations = list(
-            Location.objects.filter(validity_to__isnull=True).order_by("pk")[:200]
-        )
+        # A non-null validity_to means a versioned row was superseded or
+        # deactivated and must not be reused for newly generated data.
+        locations = Location.objects.filter(validity_to__isnull=True).order_by("pk")
+        if population_weighted_locations:
+            self.locations = list(locations.filter(type="V"))
+            if not self.locations:
+                self.locations = list(locations[:200])
+        else:
+            self.locations = list(locations[:200])
         self.health_facilities = list(
             HealthFacility.objects.filter(
                 validity_to__isnull=True,
@@ -257,14 +274,58 @@ class BulkInsureeGenerator:
             gc.collect()
         return created_objects
 
-    def _generate_insurees(self, total_insuree_count):
+    def _generate_family_sizes(self, num_families, num_members, family_size_weights):
+        if not family_size_weights:
+            return [num_members] * num_families
+
+        family_sizes = list(family_size_weights)
+        return self.random.choices(
+            family_sizes,
+            weights=[family_size_weights[size] for size in family_sizes],
+            k=num_families,
+        )
+
+    def _select_gender(self, gender_weights):
+        if not gender_weights:
+            return self.random.choice(self.genders)
+
+        genders_by_code = {gender.code: gender for gender in self.genders}
+        missing_codes = set(gender_weights) - set(genders_by_code)
+        if missing_codes:
+            raise CommandError(
+                "Missing active gender reference data for: "
+                + ", ".join(sorted(missing_codes))
+            )
+        codes = list(gender_weights)
+        code = self.random.choices(
+            codes, weights=[gender_weights[value] for value in codes]
+        )[0]
+        return genders_by_code[code]
+
+    def _select_family_location(self, location_weighting):
+        if location_weighting != "population":
+            return self.random.choice(self.locations)
+
+        # Families are normally attached to the lowest configured location
+        # level. Fall back to all locations for installations without villages.
+        candidates = [location for location in self.locations if location.type == "V"]
+        candidates = candidates or self.locations
+        weights = []
+        for location in candidates:
+            population = (location.male_population or 0) + (
+                location.female_population or 0
+            ) + (location.other_population or 0)
+            weights.append(population or location.families or 1)
+        return self.random.choices(candidates, weights=weights)[0]
+
+    def _generate_insurees(self, total_insuree_count, gender_weights=None):
         self.write(f"\n=== Generating {total_insuree_count:,} Insurees (unassigned) ===")
         insurees_to_create = []
         for _ in range(total_insuree_count):
             insuree = Insuree(
                 uuid=self._uuid4(), chf_id=self.data_gen.get_unique_chf_id(),
                 last_name=self.data_gen.get_last_name(), other_names=self.data_gen.get_first_name(),
-                gender=self.random.choice(self.genders),
+                gender=self._select_gender(gender_weights),
                 dob=date.today() - timedelta(days=self.random.randint(1, 30000)),
                 head=False,
                 card_issued=self.random.choice([True, False]),
@@ -276,9 +337,18 @@ class BulkInsureeGenerator:
             insurees_to_create.append(insuree)
         return self._bulk_create_with_progress(Insuree, insurees_to_create, "insurees")
 
-    def _generate_families_and_link_members(self, all_insurees, num_families, num_members):
-        self.write(f"\n=== Generating {num_families:,} Families and linking {num_members} members to each ===")
-        if len(all_insurees) < num_families * num_members:
+    def _generate_families_and_link_members(
+        self,
+        all_insurees,
+        family_sizes,
+        location_weighting=None,
+    ):
+        num_families = len(family_sizes)
+        self.write(
+            f"\n=== Generating {num_families:,} Families and linking "
+            f"{sum(family_sizes):,} members ==="
+        )
+        if len(all_insurees) < sum(family_sizes):
             raise CommandError("Not enough insurees to form the requested families.")
 
         insurees_pool = list(all_insurees)
@@ -289,7 +359,7 @@ class BulkInsureeGenerator:
             Family(
                 uuid=self._uuid4(),
                 head_insuree=head,
-                location=self.random.choice(self.locations),
+                location=self._select_family_location(location_weighting),
                 family_type=self.random.choice(self.family_types),
                 address=self.data_gen.get_address(),
                 audit_user_id=self.audit_user_id,
@@ -301,11 +371,11 @@ class BulkInsureeGenerator:
 
         self.write("Linking family members...")
         insurees_to_update = []
-        for family in created_families:
+        for family, family_size in zip(created_families, family_sizes):
             head = family.head_insuree
             head.family, head.head = family, True
             insurees_to_update.append(head)
-            for _ in range(num_members - 1):
+            for _ in range(family_size - 1):
                 if not members_pool:
                     break
                 member = members_pool.pop()
@@ -316,10 +386,13 @@ class BulkInsureeGenerator:
         Insuree.objects.bulk_update(insurees_to_update, ['family', 'head'], batch_size=self.batch_size)
         return created_families
 
-    def _generate_policies(self, families):
+    def _generate_policies(self, families, round_robin_products=False):
         self.write(f"\n=== Generating policies for {len(families):,} families ===")
+        products = list(self.products)
+        if round_robin_products:
+            self.random.shuffle(products)
         policies_to_create = []
-        for f in families:
+        for index, f in enumerate(families):
             enroll_date = date.today() - timedelta(days=self.random.randint(90, 730))
             # TODO: Add support for different policy stages (not just 'N')
             policy = Policy(
@@ -327,7 +400,11 @@ class BulkInsureeGenerator:
                 value=Decimal(self.random.randint(10000, 200000)) / 100,
                 family=f, enroll_date=enroll_date, start_date=enroll_date, effective_date=enroll_date,
                 expiry_date=enroll_date + timedelta(days=365),
-                product=self.random.choice(self.products),
+                product=(
+                    products[index % len(products)]
+                    if round_robin_products
+                    else self.random.choice(products)
+                ),
                 officer=self.random.choice(self.officers),
                 audit_user_id=self.audit_user_id,
             )
@@ -421,7 +498,7 @@ class BulkInsureeGenerator:
 
         return self.random.choice(self.health_facilities)
 
-    def _get_claim_progress_fields(self, claim_date, as_of_date=None):
+    def _get_claim_progress_fields(self, claim_date, as_of_date=None, progress=None):
         """Randomly advance a non-rejected claim through Submit -> Processed -> Valuated.
 
         Dates are sequential and start from claim_date (date_from). There is no
@@ -432,17 +509,22 @@ class BulkInsureeGenerator:
         Returns (status, submit_stamp, process_stamp, date_processed,
         audit_user_id_submit, audit_user_id_process).
         """
-        progress = self.random.choices(
-            list(CLAIM_PROGRESS_WEIGHTS.keys()), weights=list(CLAIM_PROGRESS_WEIGHTS.values())
-        )[0]
+        if progress is None:
+            progress = self.random.choices(
+                list(CLAIM_PROGRESS_WEIGHTS.keys()),
+                weights=list(CLAIM_PROGRESS_WEIGHTS.values()),
+            )[0]
         as_of_date = as_of_date or timezone.now().date()
         available_days = (as_of_date - claim_date).days
         if progress == "ENTERED" or available_days < SUBMIT_DELAY_RANGE_DAYS[0]:
             return Claim.STATUS_ENTERED, None, None, None, None, None
 
+        max_submit_delay = min(SUBMIT_DELAY_RANGE_DAYS[1], available_days)
+        if progress in ("PROCESSED", "VALUATED") and available_days >= 2:
+            max_submit_delay = min(max_submit_delay, available_days - 1)
         submit_delay = self.random.randint(
             SUBMIT_DELAY_RANGE_DAYS[0],
-            min(SUBMIT_DELAY_RANGE_DAYS[1], available_days),
+            max_submit_delay,
         )
         submit_stamp = self._date_to_timestamp(claim_date + timedelta(days=submit_delay))
         if progress == "SUBMIT":
@@ -503,24 +585,113 @@ class BulkInsureeGenerator:
             return timezone.make_aware(stamp, timezone.get_current_timezone())
         return stamp
 
-    def _generate_claims(self, all_insurees, num_claims_per_insuree, policy_by_family):
-        self.write(f"\n=== Generating {num_claims_per_insuree} claims for each of {len(all_insurees):,} insurees ===")
+    def _get_claim_count(self, fixed_count, average_count):
+        if average_count is None:
+            return fixed_count
+
+        # Knuth's algorithm produces a Poisson-distributed utilization count.
+        threshold = math.exp(-average_count)
+        count = 0
+        probability = 1.0
+        while probability > threshold:
+            count += 1
+            probability *= self.random.random()
+        return count - 1
+
+    def _get_realistic_claim_outcome(self):
+        outcomes = list(CLAIM_OUTCOME_WEIGHTS)
+        return self.random.choices(
+            outcomes,
+            weights=[CLAIM_OUTCOME_WEIGHTS[outcome] for outcome in outcomes],
+        )[0]
+
+    def _get_realistic_detail_fields(
+        self,
+        outcome,
+        price,
+        quantity,
+        rejection_rate,
+        force_rejected=False,
+        force_approved=False,
+        claim_rejection_reason=None,
+    ):
+        rejected = outcome == "REJECTED"
+        if outcome == "PARTIAL":
+            rejected = force_rejected or (
+                not force_approved and self.random.random() < rejection_rate
+            )
+
+        if rejected:
+            return {
+                "status": ClaimDetail.STATUS_REJECTED,
+                "qty_approved": Decimal(0),
+                "price_adjusted": Decimal(0),
+                "price_approved": Decimal(0),
+                "price_valuated": Decimal(0),
+                "rejection_reason": (
+                    claim_rejection_reason
+                    or self.random.choice(AUTOMATIC_REJECTION_REASONS)
+                ),
+                "approved_amount": Decimal(0),
+            }
+
+        approved_price = price
+        if outcome == "PARTIAL":
+            reduction_min = round(PRICE_REDUCTION_RANGE[0] * 100)
+            reduction_max = round(PRICE_REDUCTION_RANGE[1] * 100)
+            approved_price = (
+                price * Decimal(self.random.randint(reduction_min, reduction_max)) / 100
+            ).quantize(Decimal("0.01"))
+
+        return {
+            "status": ClaimDetail.STATUS_PASSED,
+            "qty_approved": quantity,
+            "price_adjusted": approved_price,
+            "price_approved": approved_price,
+            "price_valuated": approved_price,
+            "rejection_reason": None,
+            "approved_amount": approved_price * quantity,
+        }
+
+    def _generate_claims(
+        self,
+        all_insurees,
+        num_claims_per_insuree,
+        policy_by_family,
+        claims_per_insuree=None,
+        realistic_claim_outcomes=False,
+    ):
+        if claims_per_insuree is None:
+            description = f"{num_claims_per_insuree} claims for each"
+        else:
+            description = f"an average of {claims_per_insuree:g} claims for each"
+        self.write(
+            f"\n=== Generating {description} of {len(all_insurees):,} insurees ==="
+        )
         claims_to_create = []
         for insuree in all_insurees:
             earliest, latest = self._get_claim_date_range(insuree, policy_by_family)
             health_facility = self._select_claim_health_facility(insuree)
-            for _ in range(num_claims_per_insuree):
+            claim_count = self._get_claim_count(
+                num_claims_per_insuree, claims_per_insuree
+            )
+            for _ in range(claim_count):
+                claim_period_end = latest
+                if realistic_claim_outcomes:
+                    terminal_cutoff = date.today() - timedelta(days=2)
+                    if earliest <= terminal_cutoff:
+                        claim_period_end = min(latest, terminal_cutoff)
                 # IPD (in-patient) claims require a stay, so date_to is a few days after date_from.
                 # OPD (out-patient) claims are same-day and leave date_to unset.
                 care_type = self.random.choices(
                     list(CARE_TYPE_WEIGHTS.keys()), weights=list(CARE_TYPE_WEIGHTS.values())
                 )[0]
-                span_days = (latest - earliest).days
+                span_days = (claim_period_end - earliest).days
                 if care_type == "IPD" and span_days >= 2:
                     claim_date = earliest + timedelta(
                         days=self.random.randint(0, span_days - 2)
                     )
-                    max_stay = min(5, (latest - claim_date).days)
+                    max_stay = min(5, (claim_period_end - claim_date).days)
                     date_to = claim_date + timedelta(
                         days=self.random.randint(2, max_stay)
                     )
@@ -534,13 +705,40 @@ class BulkInsureeGenerator:
                 date_claimed = date_to or claim_date
                 # Visit type: "O" ordinary, "E" emergency, "R" referral (see validations.visit_type_field).
                 visit_type = self.random.choice(["O", "E", "R"])
-                status, review_status, rejection_reason, audit_user_id_review = self._get_claim_status_fields()
+                synthetic_outcome = None
+                if realistic_claim_outcomes:
+                    synthetic_outcome = self._get_realistic_claim_outcome()
+                    if synthetic_outcome == "REJECTED":
+                        status = Claim.STATUS_REJECTED
+                        review_status = Claim.REVIEW_DELIVERED
+                        rejection_reason = MEDICAL_OFFICER_REJECTION_REASON
+                        audit_user_id_review = self.audit_user_id
+                    else:
+                        status = Claim.STATUS_ENTERED
+                        review_status = Claim.REVIEW_DELIVERED
+                        rejection_reason = 0
+                        audit_user_id_review = self.audit_user_id
+                else:
+                    (
+                        status,
+                        review_status,
+                        rejection_reason,
+                        audit_user_id_review,
+                    ) = self._get_claim_status_fields()
                 submit_stamp = process_stamp = date_processed = None
                 audit_user_id_submit = audit_user_id_process = None
                 if status != Claim.STATUS_REJECTED:
-                    (status, submit_stamp, process_stamp, date_processed,
-                     audit_user_id_submit, audit_user_id_process) = self._get_claim_progress_fields(date_claimed)
-                # TODO: we need to find data diversity of claims
+                    progress = "VALUATED" if realistic_claim_outcomes else None
+                    (
+                        status,
+                        submit_stamp,
+                        process_stamp,
+                        date_processed,
+                        audit_user_id_submit,
+                        audit_user_id_process,
+                    ) = self._get_claim_progress_fields(
+                        date_claimed, progress=progress
+                    )
                 claim = Claim(
                     uuid=self._uuid4(), insuree=insuree, code=f"BULK-{self._uuid4()}",
                     date_from=claim_date, date_to=date_to, care_type=care_type, visit_type=visit_type,
@@ -553,14 +751,19 @@ class BulkInsureeGenerator:
                     audit_user_id=self.audit_user_id,
                     claimed=0,
                 )
+                claim._synthetic_outcome = synthetic_outcome
                 claims_to_create.append(claim)
 
         created_claims = self._bulk_create_with_progress(Claim, claims_to_create, "claims")
 
         claim_items_to_create, claim_services_to_create = [], []
         claim_totals = {c.id: Decimal(0) for c in created_claims}
+        claim_approved_totals = {c.id: Decimal(0) for c in created_claims}
 
         for claim in created_claims:
+            policy = policy_by_family.get(claim.insuree.family_id)
+            product = policy.product if policy else None
+            synthetic_outcome = getattr(claim, "_synthetic_outcome", None)
             # Rejected claims (automatic or Medical Officer) must have their items/services
             # marked as rejected too, with qty_approved cleared - mirrors claim.validations
             # automatic checks (see validate_assign_prod_elt: qty_approved=0 on rejection).
@@ -569,24 +772,82 @@ class BulkInsureeGenerator:
             detail_rejection_reason = claim.rejection_reason if is_rejected else None
             detail_qty_approved = Decimal(0) if is_rejected else None
 
-            # TODO: Make items/services count configurable instead of random, make it more realistic in TODO:
-            for _ in range(self.random.randint(1, 4)):  # 1-4 items per claim
+            # Claim composition varies to avoid identical item/service profiles.
+            for item_index in range(self.random.randint(1, 4)):  # 1-4 items per claim
                 price = Decimal(self.random.randint(500, 15000)) / 100
                 qty = Decimal(self.random.randint(1, 5))
+                if synthetic_outcome:
+                    detail_fields = self._get_realistic_detail_fields(
+                        synthetic_outcome,
+                        price,
+                        qty,
+                        ITEM_REJECTION_RATE,
+                        force_rejected=(
+                            synthetic_outcome == "PARTIAL" and item_index == 0
+                        ),
+                        claim_rejection_reason=(
+                            claim.rejection_reason
+                            if synthetic_outcome == "REJECTED"
+                            else None
+                        ),
+                    )
+                    detail_status = detail_fields["status"]
+                    detail_qty_approved = detail_fields["qty_approved"]
+                    detail_rejection_reason = detail_fields["rejection_reason"]
+                    price_adjusted = detail_fields["price_adjusted"]
+                    price_approved = detail_fields["price_approved"]
+                    price_valuated = detail_fields["price_valuated"]
+                    claim_approved_totals[claim.id] += detail_fields[
+                        "approved_amount"
+                    ]
+                else:
+                    price_adjusted = price_approved = price_valuated = None
                 claim_items_to_create.append(ClaimItem(
                     claim=claim, item=self.random.choice(self.items), status=detail_status, qty_provided=qty,
                     qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
-                    price_asked=price, audit_user_id=self.audit_user_id, availability=True
+                    price_asked=price, price_adjusted=price_adjusted,
+                    price_approved=price_approved, price_valuated=price_valuated,
+                    product=product, policy=policy,
+                    audit_user_id=self.audit_user_id, availability=True
                 ))
                 claim_totals[claim.id] += price * qty
 
-            for _ in range(self.random.randint(1, 3)):  # 1-3 services per claim
+            for service_index in range(self.random.randint(1, 3)):  # 1-3 services per claim
                 price = Decimal(self.random.randint(5000, 50000)) / 100
-                qty = 1
+                qty = Decimal(1)
+                if synthetic_outcome:
+                    detail_fields = self._get_realistic_detail_fields(
+                        synthetic_outcome,
+                        price,
+                        qty,
+                        SERVICE_REJECTION_RATE,
+                        force_approved=(
+                            synthetic_outcome == "PARTIAL" and service_index == 0
+                        ),
+                        claim_rejection_reason=(
+                            claim.rejection_reason
+                            if synthetic_outcome == "REJECTED"
+                            else None
+                        ),
+                    )
+                    detail_status = detail_fields["status"]
+                    detail_qty_approved = detail_fields["qty_approved"]
+                    detail_rejection_reason = detail_fields["rejection_reason"]
+                    price_adjusted = detail_fields["price_adjusted"]
+                    price_approved = detail_fields["price_approved"]
+                    price_valuated = detail_fields["price_valuated"]
+                    claim_approved_totals[claim.id] += detail_fields[
+                        "approved_amount"
+                    ]
+                else:
+                    price_adjusted = price_approved = price_valuated = None
                 claim_services_to_create.append(ClaimService(
                     claim=claim, service=self.random.choice(self.services), status=detail_status, qty_provided=qty,
                     qty_approved=detail_qty_approved, rejection_reason=detail_rejection_reason,
-                    price_asked=price, audit_user_id=self.audit_user_id
+                    price_asked=price, price_adjusted=price_adjusted,
+                    price_approved=price_approved, price_valuated=price_valuated,
+                    product=product, policy=policy,
+                    audit_user_id=self.audit_user_id
                 ))
                 claim_totals[claim.id] += price * qty
 
@@ -596,33 +857,84 @@ class BulkInsureeGenerator:
         self.write(f"Bulk updating {len(created_claims):,} claims with calculated totals...")
         for claim in created_claims:
             claim.claimed = claim_totals[claim.id]
-        Claim.objects.bulk_update(created_claims, ['claimed'], batch_size=self.batch_size)
+            if realistic_claim_outcomes:
+                claim.approved = claim_approved_totals[claim.id]
+                claim.valuated = claim.approved
+        fields_to_update = ["claimed"]
+        if realistic_claim_outcomes:
+            fields_to_update.extend(["approved", "valuated"])
+        Claim.objects.bulk_update(
+            created_claims, fields_to_update, batch_size=self.batch_size
+        )
 
         return len(created_claims), len(claim_items_to_create), len(claim_services_to_create)
 
-    def generate_bulk_data(self, num_families, num_members, num_claims):
+    def generate_bulk_data(
+        self,
+        num_families,
+        num_members,
+        num_claims,
+        family_size_weights=None,
+        gender_weights=None,
+        location_weighting=None,
+        claims_per_insuree=None,
+        round_robin_products=False,
+        realistic_claim_outcomes=False,
+    ):
         start_time = time.time()
-        self.setup_reference_data(generate_claims=num_claims > 0)
+        generate_claims = num_claims > 0 or claims_per_insuree is not None
+        self.setup_reference_data(
+            generate_claims=generate_claims,
+            population_weighted_locations=location_weighting == "population",
+        )
 
-        self.write("=" * 80 + f"\nBULK DATA GENERATION STARTED\nFamilies: {num_families:,}, Members/Family: {num_members}, Claims/Insuree: {num_claims}\n" + "=" * 80)
+        family_sizes = self._generate_family_sizes(
+            num_families, num_members, family_size_weights
+        )
+        total_insuree_count = sum(family_sizes)
+        claims_description = (
+            f"average {claims_per_insuree:g}"
+            if claims_per_insuree is not None
+            else str(num_claims)
+        )
+        self.write(
+            "=" * 80
+            + f"\nBULK DATA GENERATION STARTED\nFamilies: {num_families:,}, "
+            f"Insurees: {total_insuree_count:,}, Claims/Insuree: "
+            f"{claims_description}\n"
+            + "=" * 80
+        )
         optimizations_applied = False
         if self.optimize_database:
             optimizations_applied = PostgreSQLOptimizer.optimize_for_bulk_insert()
 
         results = {}
         try:
-            total_insuree_count = num_families * num_members
-            all_insurees = self._generate_insurees(total_insuree_count)
-            families = self._generate_families_and_link_members(all_insurees, num_families, num_members)
-            policies = self._generate_policies(families)
+            all_insurees = self._generate_insurees(
+                total_insuree_count, gender_weights=gender_weights
+            )
+            families = self._generate_families_and_link_members(
+                all_insurees,
+                family_sizes,
+                location_weighting=location_weighting,
+            )
+            policies = self._generate_policies(
+                families, round_robin_products=round_robin_products
+            )
             insuree_policies = self._generate_insuree_policies(policies)
 
             results = {'families': len(families), 'insurees': len(all_insurees),
                        'policies': len(policies), 'insuree_policies': insuree_policies}
 
-            if num_claims > 0:
+            if generate_claims:
                 policy_by_family = {p.family_id: p for p in policies}
-                claims, items, services = self._generate_claims(all_insurees, num_claims, policy_by_family)
+                claims, items, services = self._generate_claims(
+                    all_insurees,
+                    num_claims,
+                    policy_by_family,
+                    claims_per_insuree=claims_per_insuree,
+                    realistic_claim_outcomes=realistic_claim_outcomes,
+                )
                 results.update({'claims': claims, 'claim_items': items, 'claim_services': services})
 
         finally:
@@ -642,7 +954,18 @@ class BulkInsureeGenerator:
 class Command(BaseCommand):
     help = 'Generate bulk insuree, policy, and claim test data for the project.'
 
-    DEFAULT_CONFIG = {"families": 1000, "members": 4, "claims": 0}
+    DEFAULT_CONFIG = {
+        "families": 1000,
+        "members": 4,
+        "claims": 0,
+        "family_size_weights": None,
+        "gender_weights": None,
+        "location_weighting": None,
+        "claims_per_insuree": None,
+        "round_robin_products": False,
+        "realistic_claim_outcomes": False,
+        "country": None,
+    }
     PRESETS = {
         "small": {"families": 1000, "members": 3, "claims": 1},
         "medium": {"families": 10000, "members": 4, "claims": 2},
@@ -650,10 +973,50 @@ class Command(BaseCommand):
     }
 
     def add_arguments(self, parser):
-        parser.add_argument('--preset', choices=['small', 'medium', 'large'], help='Use preset configuration.')
+        scenario = parser.add_mutually_exclusive_group()
+        scenario.add_argument(
+            '--preset',
+            choices=['small', 'medium', 'large'],
+            help='Use the original fixed-size preset configuration.',
+        )
+        scenario.add_argument(
+            '--country',
+            choices=sorted(REALISTIC_COUNTRY_PRESETS),
+            help='Use a realistic country distribution preset.',
+        )
         parser.add_argument('--families', type=int, help='Number of families to generate.')
         parser.add_argument('--members', type=int, help='Fixed number of members per family.')
         parser.add_argument('--claims', type=int, help='Number of claims to generate per insuree. If 0, no claims are created.')
+        parser.add_argument(
+            '--family-size-weights',
+            help='JSON object of family sizes and probability weights.',
+        )
+        parser.add_argument(
+            '--gender-weights',
+            help='JSON object with M and F probability weights.',
+        )
+        parser.add_argument(
+            '--location-weighting',
+            choices=['uniform', 'population'],
+            help='Choose family locations uniformly or by recorded population.',
+        )
+        parser.add_argument(
+            '--claims-per-insuree',
+            type=float,
+            help='Average claims per insuree using a Poisson distribution.',
+        )
+        parser.add_argument(
+            '--round-robin-products',
+            action='store_true',
+            default=None,
+            help='Distribute family policies across active products in rotation.',
+        )
+        parser.add_argument(
+            '--realistic-claim-outcomes',
+            action='store_true',
+            default=None,
+            help='Generate 70%% approved, 10%% rejected and 20%% partial claims.',
+        )
         parser.add_argument('--batch-size', type=int, default=2000, help='Batch size for bulk operations.')
         parser.add_argument(
             '--seed',
@@ -678,16 +1041,63 @@ class Command(BaseCommand):
         config = dict(cls.DEFAULT_CONFIG)
         if options.get('preset'):
             config.update(cls.PRESETS[options['preset']])
+        if options.get('country'):
+            config.update(REALISTIC_COUNTRY_PRESETS[options['country']])
+            config['country'] = options['country']
 
         for key in ('families', 'members', 'claims'):
             if options.get(key) is not None:
                 config[key] = options[key]
+
+        if options.get('members') is not None:
+            config['family_size_weights'] = None
+        if options.get('claims') is not None:
+            config['claims_per_insuree'] = None
+
+        if options.get('family_size_weights'):
+            config['family_size_weights'] = cls.parse_weights(
+                options['family_size_weights'], int, 'family-size'
+            )
+        if options.get('gender_weights'):
+            config['gender_weights'] = cls.parse_weights(
+                options['gender_weights'], str, 'gender'
+            )
+        for key in (
+            'location_weighting',
+            'claims_per_insuree',
+            'round_robin_products',
+            'realistic_claim_outcomes',
+        ):
+            if options.get(key) is not None:
+                config[key] = options[key]
+
+        try:
+            validate_realistic_config(config)
+        except ValueError as error:
+            raise CommandError(str(error)) from error
         return config
+
+    @staticmethod
+    def parse_weights(raw_value, key_type, name):
+        try:
+            values = json.loads(raw_value)
+            return {key_type(key): value for key, value in values.items()}
+        except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise CommandError(
+                f"Invalid {name} weights. Provide a JSON object."
+            ) from error
 
     def handle(self, *args, **options):
         config = self.resolve_config(options)
         if options['preset']:
             self.stdout.write(self.style.SUCCESS(f"Using preset '{options['preset']}' configuration"))
+        if options['country']:
+            country_name = REALISTIC_COUNTRY_PRESETS[options['country']]['name']
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Using realistic country configuration: {country_name}"
+                )
+            )
 
         if config['families'] < 1:
             raise CommandError("Number of families must be at least 1.")
@@ -703,8 +1113,20 @@ class Command(BaseCommand):
             batch_size = 5000
             self.stdout.write(self.style.WARNING(f"Auto-adjusted batch size to {batch_size} for large dataset"))
 
-        total_insurees = config['families'] * config['members']
-        total_claims = total_insurees * config['claims']
+        if config['family_size_weights']:
+            average_family_size = sum(
+                size * weight
+                for size, weight in config['family_size_weights'].items()
+            )
+        else:
+            average_family_size = config['members']
+        total_insurees = round(config['families'] * average_family_size)
+        claims_per_insuree = (
+            config['claims_per_insuree']
+            if config['claims_per_insuree'] is not None
+            else config['claims']
+        )
+        total_claims = round(total_insurees * claims_per_insuree)
 
         self.stdout.write(
             "\n"
@@ -714,10 +1136,15 @@ class Command(BaseCommand):
             + "\n"
             + "=" * 60
         )
-        self.stdout.write(f"Families to create: {config['families']:,}\nMembers per family: {config['members']}\nTotal insurees: {total_insurees:,}")
-        if config['claims'] > 0:
+        self.stdout.write(
+            f"Families to create: {config['families']:,}\n"
+            f"Average members per family: {average_family_size:.2f}\n"
+            f"Estimated total insurees: {total_insurees:,}"
+        )
+        if claims_per_insuree > 0:
             self.stdout.write(
-                f"Claims per insuree: {config['claims']}\nTotal claims: {total_claims:,}"
+                f"Claims per insuree: {claims_per_insuree:g}\n"
+                f"Estimated total claims: {total_claims:,}"
             )
 
         if not options['no_confirm']:
@@ -733,6 +1160,16 @@ class Command(BaseCommand):
                 audit_user_id=options['audit_user_id'],
                 optimize_database=not options['no_db_optimization'],
             )
-            results = generator.generate_bulk_data(config['families'], config['members'], config['claims'])
+            results = generator.generate_bulk_data(
+                config['families'],
+                config['members'],
+                config['claims'],
+                family_size_weights=config['family_size_weights'],
+                gender_weights=config['gender_weights'],
+                location_weighting=config['location_weighting'],
+                claims_per_insuree=config['claims_per_insuree'],
+                round_robin_products=config['round_robin_products'],
+                realistic_claim_outcomes=config['realistic_claim_outcomes'],
+            )
 
         self.stdout.write(self.style.SUCCESS(f"\n Successfully generated synthetic data in {results['duration']:.2f} seconds!"))

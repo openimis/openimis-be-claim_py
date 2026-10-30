@@ -56,6 +56,13 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 ## Additional Endpoints
 * print: generating Claim PDF
 
+## Synthetic test data
+
+The `seed_synthetic_health_data` management command supports the original
+fixed-size generation and opt-in realistic country distributions. See
+[Synthetic health data generator](SYNTHETIC_DATA.md) for usage and corrected
+verification queries.
+
 ## Reports
 * `claim_claim`: Claim summary
 
