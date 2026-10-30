@@ -19,6 +19,7 @@ setup(
     author="Xavier Gillmann",
     author_email="xgillmann@bluesquarehub.com",
     install_requires=[
+        "Faker",
         "django",
         "django-db-signals",
         "djangorestframework",
