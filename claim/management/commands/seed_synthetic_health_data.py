@@ -195,7 +195,10 @@ class BulkInsureeGenerator:
             Location.objects.filter(validity_to__isnull=True).order_by("pk")[:200]
         )
         self.health_facilities = list(
-            HealthFacility.objects.filter(validity_to__isnull=True).order_by("pk")[:100]
+            HealthFacility.objects.filter(
+                validity_to__isnull=True,
+                status=HealthFacility.HealthFacilityStatus.ACTIVE,
+            ).order_by("pk")[:100]
         )
         self.products = list(
             Product.objects.filter(validity_to__isnull=True).order_by("pk")[:20]
@@ -399,6 +402,25 @@ class BulkInsureeGenerator:
             )
         return Claim.STATUS_ENTERED, Claim.REVIEW_IDLE, 0, None
 
+    def _select_claim_health_facility(self, insuree):
+        """Return a currently active health facility for a generated claim."""
+        if not self.health_facilities:
+            raise CommandError(
+                "Cannot generate claims without an active health facility."
+            )
+
+        insuree_health_facility = getattr(insuree, "health_facility", None)
+        active_health_facility_ids = {
+            health_facility.pk for health_facility in self.health_facilities
+        }
+        if (
+            insuree_health_facility is not None
+            and insuree_health_facility.pk in active_health_facility_ids
+        ):
+            return insuree_health_facility
+
+        return self.random.choice(self.health_facilities)
+
     def _get_claim_progress_fields(self, claim_date, as_of_date=None):
         """Randomly advance a non-rejected claim through Submit -> Processed -> Valuated.
 
@@ -486,6 +508,7 @@ class BulkInsureeGenerator:
         claims_to_create = []
         for insuree in all_insurees:
             earliest, latest = self._get_claim_date_range(insuree, policy_by_family)
+            health_facility = self._select_claim_health_facility(insuree)
             for _ in range(num_claims_per_insuree):
                 # IPD (in-patient) claims require a stay, so date_to is a few days after date_from.
                 # OPD (out-patient) claims are same-day and leave date_to unset.
@@ -525,7 +548,7 @@ class BulkInsureeGenerator:
                     rejection_reason=rejection_reason, audit_user_id_review=audit_user_id_review,
                     submit_stamp=submit_stamp, process_stamp=process_stamp, date_processed=date_processed,
                     audit_user_id_submit=audit_user_id_submit, audit_user_id_process=audit_user_id_process,
-                    health_facility=insuree.health_facility or self.random.choice(self.health_facilities),
+                    health_facility=health_facility,
                     icd=self.random.choice(self.diagnoses),
                     audit_user_id=self.audit_user_id,
                     claimed=0,

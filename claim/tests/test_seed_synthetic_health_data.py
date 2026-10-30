@@ -227,6 +227,8 @@ class GenerateClaimsTest(SimpleTestCase):
             details_by_claim[detail.claim_id].append(detail)
 
         for claim in claims:
+            self.assertIsNotNone(claim.health_facility_id)
+            self.assertIn(claim.health_facility, self.generator.health_facilities)
             self.assertGreaterEqual(claim.date_from, self.policy.effective_date)
             self.assertLessEqual(claim.date_from, self.policy.expiry_date)
             self.assertEqual(claim.audit_user_id, 7)
@@ -258,6 +260,33 @@ class GenerateClaimsTest(SimpleTestCase):
                 else:
                     self.assertEqual(detail.status, ClaimDetail.STATUS_PASSED)
                     self.assertIsNone(detail.rejection_reason)
+
+    def test_missing_insuree_health_facility_uses_active_fallback(self):
+        self.insuree.health_facility = None
+
+        self._generate(3)
+
+        for claim in self.created[Claim]:
+            self.assertEqual(claim.health_facility, self.health_facility)
+            self.assertIsNotNone(claim.health_facility_id)
+
+    def test_inactive_insuree_health_facility_uses_active_fallback(self):
+        inactive_health_facility = HealthFacility(id=2)
+        self.insuree.health_facility = inactive_health_facility
+
+        self._generate(3)
+
+        for claim in self.created[Claim]:
+            self.assertEqual(claim.health_facility, self.health_facility)
+
+    def test_claim_generation_requires_an_active_health_facility(self):
+        self.generator.health_facilities = []
+
+        with self.assertRaisesMessage(
+            CommandError,
+            "Cannot generate claims without an active health facility.",
+        ):
+            self._generate(1)
 
     def _generate(self, count):
         next_ids = {Claim: 1, ClaimItem: 1, ClaimService: 1}
