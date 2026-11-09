@@ -1,9 +1,7 @@
 import base64
-from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, permission_classes
-from location.models import LocationManager
 from report.services import ReportService
 from core.security import checkUserWithRights
 from .services import ClaimReportService
@@ -33,14 +31,9 @@ def print(request):
     ]
 )
 def attach(request):
-    queryset = ClaimAttachment.objects.filter(*core.filter_validity())
-    if settings.ROW_SECURITY:
-        queryset = LocationManager().build_user_location_filter_query(
-            request.user._u,
-            prefix="health_facility__location",
-            queryset=queryset.select_related("claim"),
-            loc_types=["D"],
-        )
+    queryset = ClaimAttachment.get_queryset(
+        ClaimAttachment.objects.filter(*core.filter_validity()), request.user
+    )
     attachment = queryset.filter(id=request.GET["id"]).first()
     if not attachment:
         raise PermissionDenied(_("unauthorized"))

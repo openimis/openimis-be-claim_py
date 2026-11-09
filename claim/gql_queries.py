@@ -20,9 +20,10 @@ from claim.models import (
 from django.utils.translation import gettext as _
 from django.core.exceptions import PermissionDenied
 from core.schema import ClaimAdminGQLType
+from core.gql import ScopedQuerysetMixin
 
 
-class ClaimDedRemGQLType(DjangoObjectType):
+class ClaimDedRemGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Details about Claim demands and remunerated amounts
     """
@@ -128,11 +129,13 @@ class ClaimGQLType(DjangoObjectType):
     @classmethod
     def get_queryset(cls, queryset, info):
         if info.field_name == "claimHistory":
+            # The resolver already scoped this through the current claim; the
+            # rows are superseded versions, which Claim.get_queryset would drop.
             return queryset
         return Claim.get_queryset(queryset, info).all()
 
 
-class ClaimAttachmentGQLType(DjangoObjectType):
+class ClaimAttachmentGQLType(ScopedQuerysetMixin, DjangoObjectType):
     doc = graphene.String()
 
     class Meta:
@@ -152,9 +155,8 @@ class ClaimAttachmentGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     @classmethod
-    def get_queryset(cls, queryset, info):
-        queryset = queryset.filter(*ClaimAttachment.filter_validity())
-        return queryset
+    def refine_queryset(cls, queryset, info):
+        return queryset.filter(*ClaimAttachment.filter_validity())
 
 
 class ClaimAttachmentTypeGQLType(DjangoObjectType):
@@ -170,7 +172,7 @@ class FeedbackGQLType(DjangoObjectType):
         model = Feedback
 
 
-class ClaimItemGQLType(DjangoObjectType):
+class ClaimItemGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the items within a specific Claim
     """
@@ -179,7 +181,7 @@ class ClaimItemGQLType(DjangoObjectType):
         model = ClaimItem
 
 
-class ClaimServiceGQLType(DjangoObjectType):
+class ClaimServiceGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the services within a specific Claim
     """
@@ -188,7 +190,7 @@ class ClaimServiceGQLType(DjangoObjectType):
         model = ClaimService
 
 
-class ClaimServiceServiceGQLType(DjangoObjectType):
+class ClaimServiceServiceGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the Claim services within a specific Claim
     """
@@ -197,7 +199,7 @@ class ClaimServiceServiceGQLType(DjangoObjectType):
         model = ClaimServiceService
 
 
-class ClaimServiceItemGQLType(DjangoObjectType):
+class ClaimServiceItemGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Contains the Claim services within a specific Claim
     """

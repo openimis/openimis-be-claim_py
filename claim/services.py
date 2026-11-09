@@ -30,7 +30,11 @@ from claim.utils import (
     get_claim_target_date,
     approved_amount,
 )
-from .validations import validate_claim, get_claim_category
+from .validations import (
+    validate_claim,
+    get_claim_category,
+    REJECTION_REASON_INVALID_CLAIM,
+)
 from django.db.models import Subquery, F, OuterRef, Sum, FloatField
 from django.db.models.functions import Coalesce
 from django.contrib.auth.models import AnonymousUser
@@ -182,6 +186,9 @@ class ClaimSubmitError(Exception):
         7: "Invalid ItemCode",
         8: "Invalid ServiceCode",
         9: "Invalid Claim Admin",
+        10: "Start date is later than the claim date",
+        11: "End date is later than the claim date",
+        12: "Claim date is in the future",
     }
 
     def __init__(self, code, msg=None):
@@ -192,6 +199,74 @@ class ClaimSubmitError(Exception):
 
     def __str__(self):
         return "ClaimSubmitError %s: %s" % (self.code, self.msg)
+
+
+# Entry (field) errors use the ClaimSubmitError codes, so that GraphQL and FHIR
+# report the same code for the same mistake. They are not rejection reasons:
+# the claim is not rejected, it is saved with Claim.STATUS_ERROR.
+CLAIM_ENTRY_ERROR_DATE_TO_BEFORE_DATE_FROM = 4
+CLAIM_ENTRY_ERROR_DATE_FROM_AFTER_DATE_CLAIMED = 10
+CLAIM_ENTRY_ERROR_DATE_TO_AFTER_DATE_CLAIMED = 11
+CLAIM_ENTRY_ERROR_DATE_CLAIMED_IN_FUTURE = 12
+
+
+def _as_date(value):
+    if isinstance(value, str):
+        return datetime.date.fromisoformat(value[:10])
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    return value
+
+
+def get_claim_field_errors(data):
+    """
+    Return the field errors of claim data, empty when there are none. Checked
+    whenever a claim is entered or updated, through GraphQL or FHIR: a claim
+    with field errors is saved with Claim.STATUS_ERROR rather than refused, so
+    that what was entered is not lost for a typo.
+    """
+    date_from = _as_date(data.get("date_from"))
+    date_to = _as_date(data.get("date_to"))
+    date_claimed = _as_date(data.get("date_claimed"))
+    # the care is given before it is claimed, and a claim is not made in
+    # advance: the claim form enforces the same rule (OP-3250)
+    failed = [
+        (
+            CLAIM_ENTRY_ERROR_DATE_TO_BEFORE_DATE_FROM,
+            date_from and date_to and date_to < date_from,
+        ),
+        (
+            CLAIM_ENTRY_ERROR_DATE_FROM_AFTER_DATE_CLAIMED,
+            date_from and date_claimed and date_from > date_claimed,
+        ),
+        (
+            CLAIM_ENTRY_ERROR_DATE_TO_AFTER_DATE_CLAIMED,
+            date_to and date_claimed and date_to > date_claimed,
+        ),
+        (
+            CLAIM_ENTRY_ERROR_DATE_CLAIMED_IN_FUTURE,
+            date_claimed and date_claimed > datetime.date.today(),
+        ),
+    ]
+    return [
+        {"code": code, "message": ClaimSubmitError.ERROR_CODES[code]}
+        for code, error in failed
+        if error
+    ]
+
+
+def get_saved_claim_field_errors(claim):
+    """Return the field errors of a saved claim, each with its uuid as detail."""
+    errors = get_claim_field_errors(
+        {
+            "date_from": claim.date_from,
+            "date_to": claim.date_to,
+            "date_claimed": claim.date_claimed,
+        }
+    )
+    for error in errors:
+        error["detail"] = str(claim.uuid)
+    return errors
 
 
 class ClaimSubmitService(object):
@@ -209,6 +284,9 @@ class ClaimSubmitService(object):
     ) -> Claim:
         create_claim_service = ClaimCreateService(self.user)
         entered_claim = create_claim_service.enter_claim(claim)
+        if entered_claim.status == Claim.STATUS_ERROR:
+            # kept with its field errors, but not submitted
+            return entered_claim
         submitted_claim, errors = self.submit_claim(
             entered_claim, rule_engine_validation
         )
@@ -221,6 +299,17 @@ class ClaimSubmitService(object):
         """
         self._validate_submit_permissions()
         self._validate_user_hf(claim.health_facility.code)
+        if claim.status != Claim.STATUS_ENTERED:
+            # only Entered claims are submitted: a claim in Error must be
+            # corrected first, and a claim already submitted is left as it is
+            return claim, [
+                {
+                    "code": REJECTION_REASON_INVALID_CLAIM,
+                    "message": _("claim.validation.claim_not_entered")
+                    % {"code": claim.code},
+                    "detail": str(claim.uuid),
+                }
+            ]
         claim.save_history()
         validation_errors = processing_claim(
             claim, self.user, False, rule_engine_validation
@@ -290,16 +379,7 @@ class ClaimReportService(object):
     def fetch(self, uuid):
         from .models import Claim
 
-        queryset = Claim.objects.filter(*core.filter_validity())
-        if settings.ROW_SECURITY:
-            from location.models import LocationManager
-
-            queryset = LocationManager().build_user_location_filter_query(
-                self.user._u,
-                prefix="health_facility__location",
-                queryset=queryset,
-                loc_types=["D"],
-            )
+        queryset = Claim.get_queryset(Claim.objects.all(), self.user)
         claim = (
             queryset.select_related("health_facility")
             .select_related("insuree")
@@ -353,6 +433,8 @@ class ClaimCreateService:
         self._validate_claim_fields(claim)
         self._validate_user_hf(claim.get("health_facility_id", None))
         self._ensure_entered_claim_fields(claim)
+        if get_claim_field_errors(claim):
+            claim["status"] = Claim.STATUS_ERROR
         claim = self._create_claim_from_dict(claim)
         return claim
 
@@ -506,18 +588,37 @@ def claim_create_items_and_services(claim, data, user):
 
 
 def update_or_create_claim(data, user):
+    return save_claim(data, user)[0]
 
+
+def save_claim(data, user):
+    """
+    Create or update a claim and return it with its field errors. A claim with
+    field errors is saved in Error; saved again without, it goes back to Entered.
+    """
     validate_claim_data(data, user)
+    field_errors = get_claim_field_errors(data)
     claim_uuid = data.pop("uuid", None)
     # update_or_create(uuid=claim_uuid, ...)
     # doesn't work because of explicit attempt to set null to uuid!
 
-    if claim_uuid:
-        claim = Claim.objects.get(uuid=claim_uuid)
+    claim = (
+        Claim.get_queryset(Claim.objects.all(), user).get(uuid=claim_uuid)
+        if claim_uuid
+        else None
+    )
+    if field_errors:
+        data["status"] = Claim.STATUS_ERROR
+    elif claim and claim.status == Claim.STATUS_ERROR:
+        data["status"] = Claim.STATUS_ENTERED
+
+    if claim:
         claim = claim_update(claim, data, user)
     else:
         claim = claim_create(data, user)
-    return claim
+    for error in field_errors:
+        error["detail"] = str(claim.uuid)
+    return claim, field_errors
 
 
 def validate_claim_data(data, user):
@@ -525,13 +626,21 @@ def validate_claim_data(data, user):
     incoming_code = data.get("code")
     claim_uuid = data.get("uuid", None)
     restore = data.get("restore", None)
-    current_claim = Claim.objects.filter(uuid=claim_uuid).first()
+    current_claim = (
+        Claim.get_queryset(Claim.objects.all(), user).filter(uuid=claim_uuid).first()
+        if claim_uuid
+        else None
+    )
     current_code = current_claim.code if current_claim else None
 
     if restore:
-        restored_qs = Claim.objects.filter(uuid=restore)
+        restored_qs = Claim.get_queryset(Claim.objects.all(), user).filter(uuid=restore)
         restored_from_claim = restored_qs.first()
-        restored_count = Claim.objects.filter(restore=restored_from_claim).count()
+        # current rows only: the history rows an update or a submission leaves,
+        # and the Error version of a corrected claim, are not restores
+        restored_count = Claim.objects.filter(
+            *Claim.filter_validity(), restore=restored_from_claim
+        ).count()
         if not restored_qs.exists():
             raise ValidationError(_("mutation.restored_from_does_not_exist"))
         if not restored_from_claim.status == Claim.STATUS_REJECTED:
@@ -548,6 +657,7 @@ def validate_claim_data(data, user):
             )
 
     elif current_claim is not None and current_claim.status not in (
+        Claim.STATUS_ERROR,
         Claim.STATUS_CHECKED,
         Claim.STATUS_ENTERED,
     ):
@@ -692,10 +802,12 @@ def set_claim_processed_or_valuated(claim, errors, user):
             claim.status = Claim.STATUS_REJECTED
         if claim.status == Claim.STATUS_CHECKED:
             claim.approved = approved_amount(claim)
+            # A claim is processed before it is valuated: record the processing
+            # date on both outcomes, keeping one that is already set.
+            claim.date_processed = claim.date_processed or datetime.date.today()
             if with_relative_prices(claim):
                 claim.status = Claim.STATUS_PROCESSED
                 claim.process_stamp = datetime.datetime.now()
-                claim.date_processed = datetime.date.today()
             else:
                 claim.status = Claim.STATUS_VALUATED
                 claim.valuated = claim.approved
@@ -738,8 +850,16 @@ def with_relative_prices(claim):
 
 
 def set_claims_status(uuids, field, status, audit_data=None, user=None):
+    """Set ``field`` to ``status`` on the claims named by ``uuids``.
+
+    With a ``user``, only the claims that user may see are changed; the others
+    are reported as not found. Without one (a system workflow such as claim
+    sampling), every named claim is changed.
+    """
     errors = []
     claims = Claim.objects.filter(uuid__in=uuids, *Claim.filter_validity())
+    if user is not None:
+        claims = Claim.get_queryset(claims, user)
     remaining_uuid = list(set(map(str.upper, uuids)))
     for claim in claims:
         remaining_uuid.remove(claim.uuid.upper())
@@ -845,7 +965,7 @@ def update_claims_dedrems(uuids, user, claims=None):
         # Additional check, empty uuids results in transaction error if uuids are queryset of uuids.
         return []
     elif uuids:
-        claims = Claim.objects.filter(uuid__in=uuids)
+        claims = Claim.get_queryset(Claim.objects.filter(uuid__in=uuids), user)
     errors = []
 
     remaining_uuid = list(map(UUID, uuids)) if uuids else []
@@ -859,3 +979,56 @@ def update_claims_dedrems(uuids, user, claims=None):
             _("claim.validation.id_does_not_exist") % {"id": ",".join(remaining_uuid)}
         )
     return errors
+
+
+def handle_claim_subscription_notification(sender, **kwargs):
+    """
+    Notify FHIR subscribers after a successful GraphQL claim creation.
+
+    The FHIR module is optional, so its dependencies are imported only when
+    this hook runs. Notification failures must not fail an otherwise successful
+    claim mutation.
+    """
+    try:
+        from api_fhir_r4.configurations.R4ClaimConfig import R4ClaimConfig
+        from api_fhir_r4.converters.claimResponseConverter import (
+            ClaimResponseConverter,
+        )
+        from api_fhir_r4.signals import notify_subscribers
+
+        if not R4ClaimConfig.get_subscribe_claim_signal():
+            logger.debug("Claim subscription is disabled, skipping notification")
+            return
+
+        mutation_data = kwargs.get("data", {})
+        claim_code = mutation_data.get("code")
+        user = kwargs.get("user")
+
+        if not claim_code:
+            logger.warning("No claim code found in mutation data for notification")
+            return
+        if not user:
+            logger.warning("No user found in mutation data for notification")
+            return
+
+        claim = Claim.objects.filter(
+            code=claim_code,
+            validity_to__isnull=True,
+        ).first()
+        if not claim:
+            logger.warning("Could not find created claim with code: %s", claim_code)
+            return
+
+        logger.info(
+            "Processing subscription for claim %s on behalf of user %s",
+            claim.uuid,
+            user.username,
+        )
+        notify_subscribers(
+            claim,
+            ClaimResponseConverter(user=user),
+            "Claim",
+            None,
+        )
+    except Exception as e:
+        logger.error("Error while processing Claim Subscription from web", exc_info=e)

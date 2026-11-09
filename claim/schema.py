@@ -2,8 +2,9 @@ import graphene
 from enum import Enum
 import logging
 from core.models import Officer, MutationLog
+from insuree.apps import InsureeConfig
 from insuree.models import Insuree
-from .services import check_unique_claim_code
+from .services import check_unique_claim_code, handle_claim_subscription_notification
 from core.schema import (
     signal_mutation_module_validate,
     signal_mutation_module_after_mutating,
@@ -11,14 +12,13 @@ from core.schema import (
 from django.db.models import OuterRef, Subquery, Avg, Q
 import graphene_django_optimizer as gql_optimizer
 from core.schema import OrderedDjangoFilterConnectionField, OfficerGQLType
-from django.conf import settings
-from .models import ClaimMutation, Claim
+from .models import ClaimMutation, Claim, ClaimAttachment
 from django.utils.translation import gettext as _
 from graphene_django.filter import DjangoFilterConnectionField
 from django.core.exceptions import PermissionDenied
 from .apps import ClaimConfig
-# We do need all queries and mutations in the namespace here.
 
+# We do need all queries and mutations in the namespace here.
 from location.schema import HealthFacilityGQLType
 from .gql_queries import (
     ClaimAttachmentTypeGQLType,
@@ -42,7 +42,7 @@ from .gql_mutations import (
     UpdateAttachmentMutation,
     CreateAttachmentMutation,
     UpdateClaimMutation,
-    CreateClaimMutation
+    CreateClaimMutation,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,10 +109,17 @@ class Query(graphene.ObjectType):
     )
 
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
+        # A nationwide lookup: it queries Insuree by CHFID with no location filter, so
+        # any CHFID resolves to that insuree's name wherever they live. That is the
+        # enquiry, and it now takes the right that names it (101105). It used to be
+        # reachable with "create claim" or "update claim", which are about claims, not
+        # about reading the whole insuree register - so every claim clerk had it by
+        # default.
+        #
+        # The right is InsureeConfig's, not ClaimConfig's: the data exposed is insuree
+        # data, and this resolver is only one of the places that could ask for it.
         if not info.context.user.has_perms(
-            ClaimConfig.gql_mutation_create_claims_perms
-        ) and not info.context.user.has_perms(
-            ClaimConfig.gql_mutation_update_claims_perms
+            InsureeConfig.gql_query_insuree_inquire_perms
         ):
             raise PermissionDenied(_("unauthorized"))
         chf_id = kwargs.get("chfId")
@@ -134,16 +141,20 @@ class Query(graphene.ObjectType):
         return False if errors else True
 
     def resolve_claim(self, info, id=None, uuid=None, **kwargs):
-        if (
-            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
-            and settings.ROW_SECURITY
-        ):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
+        # A plain Field gets no queryset hook from graphene, so the lookup goes
+        # through the model's row security itself. A claim outside the user's
+        # scope resolves to null, exactly like one that does not exist, so the
+        # answer does not reveal which ids exist elsewhere.
         if id is not None:
-            return Claim.objects.get(id=id)
-        if uuid is not None:
-            return Claim.objects.get(uuid=uuid)
+            lookup = {"id": id}
+        elif uuid is not None:
+            lookup = {"uuid": uuid}
+        else:
+            return None
+        return Claim.get_queryset(Claim.objects.all(), info).filter(**lookup).first()
 
     def resolve_claims(self, info, **kwargs):
         class AttachmentStatusEnum(Enum):
@@ -151,10 +162,7 @@ class Query(graphene.ObjectType):
             WITH = 1
             WITHOUT = 2
 
-        if (
-            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
-            and settings.ROW_SECURITY
-        ):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
         query = Claim.objects
         filters = []
@@ -230,6 +238,17 @@ class Query(graphene.ObjectType):
     def resolve_claim_attachments(self, info, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
+        return ClaimAttachment.get_queryset(ClaimAttachment.objects.all(), info)
+
+    # `claimAttachmentType` had neither a resolver nor a `get_queryset` on its type:
+    # the field was exposed with no verification at all, including to an anonymous
+    # caller. Reference data (attachment types), so the impact is low, but it is a
+    # complete absence of any check on an entry point. Same right as
+    # `resolve_claim_attachments` just above; returning `None` lets graphene use the
+    # default manager, so only the check is added.
+    def resolve_claim_attachment_type(self, info, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
 
     def resolve_claim_officers(self, info, search=None, **kwargs):
         if not info.context.user.has_perms(ClaimConfig.gql_query_claim_officers_perms):
@@ -274,14 +293,17 @@ class Query(graphene.ObjectType):
     def resolve_claim_history(self, info, **kwargs):
         claim_uuid = kwargs.get('claim_uuid')
 
-        if (
-            not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms)
-            and settings.ROW_SECURITY
-        ):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
             raise PermissionDenied(_("unauthorized"))
 
+        # History rows are superseded (validity_to set), so Claim.get_queryset,
+        # which keeps current rows only, cannot filter them directly. The history
+        # of a claim is visible when the claim itself is: scope the current claim
+        # and follow legacy_id from there. ClaimGQLType.get_queryset leaves this
+        # field alone for the same reason.
+        current_claim = Claim.get_queryset(Claim.objects.all(), info).filter(uuid=claim_uuid)
         query = Claim.objects.filter(
-            legacy_id=Subquery(Claim.objects.filter(uuid=claim_uuid).values('id')),
+            legacy_id=Subquery(current_claim.values('id')),
             validity_to__isnull=False
         )
 
@@ -302,6 +324,14 @@ class Query(graphene.ObjectType):
 
         if filters:
             query = query.filter(*filters).distinct()
+
+        # A history with no order is not a history: these rows were coming back
+        # in whatever order the database happened to hold them, so the same
+        # query could return the versions either way round. Oldest supersession
+        # first, which is how a timeline reads; `orderBy` still overrides it.
+        # This is what made test_claim_history_query pass or fail depending on
+        # the order the test suite happened to run in (OP-3198).
+        query = query.order_by("validity_to")
 
         return gql_optimizer.query(query, info)
 
@@ -353,12 +383,12 @@ def on_claim_after_mutation(sender, **kwargs):
             mutation_log.client_mutation_label = kwargs["data"]["client_mutation_label"]
             mutation_log.autogenerated_code = kwargs["data"]["code"]
             mutation_log.save()
-            return []
         except KeyError as e:
             logger.error(
                 "Client Mutation ID not found in claim signal after mutation, error: ",
                 e,
             )
+    handle_claim_subscription_notification(sender, **kwargs)
     return []
 
 

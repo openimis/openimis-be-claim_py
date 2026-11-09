@@ -1,4 +1,5 @@
 from claim.models import Claim, ClaimService, ClaimItem, ClaimDedRem
+from claim.test_factories import ClaimAttachmentFactory
 from core.models.user import ClaimAdmin
 from claim.validations import get_claim_category
 from claim.utils import approved_amount
@@ -90,6 +91,10 @@ def create_test_claim(custom_props=None, user=DummyUser(), product=None):
         user,
     )
     return claim
+
+
+def create_test_claim_attachment(claim, custom_props=None):
+    return ClaimAttachmentFactory(claim=claim, **(custom_props or {}))
 
 
 def create_test_claimitem(

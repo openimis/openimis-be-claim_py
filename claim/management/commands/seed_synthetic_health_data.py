@@ -9,6 +9,8 @@ Should NOT be used in production with real patient data
 Django Management Command for Bulk Synthetic Data Generation
 
 
+TODO: to generate this data more realistic and diversion, based on HF, location, Claim, Family
+that looks more realistic approach
 Usage:
     # Generate 1000 families with 4 members each, and 2 claims per insuree
     python manage.py seed_synthetic_health_data --families 1000 --members 4 --claims 2
@@ -29,7 +31,8 @@ import math
 import random
 import time
 import uuid
-from contextlib import nullcontext
+
+
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -47,6 +50,7 @@ from claim.management.commands.synthetic_data_config import (
     SERVICE_REJECTION_RATE,
     validate_realistic_config,
 )
+
 from claim.validations import (
     REJECTION_REASON_CARE_TYPE, REJECTION_REASON_CATEGORY_LIMITATION,
     REJECTION_REASON_FAMILY, REJECTION_REASON_FREQUENCY_FAILURE,
@@ -64,6 +68,7 @@ from insuree.models import (
     InsureePolicy,
     InsureeStatus,
 )
+
 from location.models import HealthFacility, Location
 from medical.models import Diagnosis, Item, Service
 from policy.models import Policy

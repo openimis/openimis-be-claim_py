@@ -20,19 +20,23 @@ from claim.test_helpers import (
     mark_test_claim_as_processed,
 )
 from core.test_helpers import create_test_officer, create_test_interactive_user
-from datetime import date, timedelta, datetime
+from datetime import date, time, timedelta, datetime
 from claim.validations import (
     get_claim_category,
     validate_claim,
     REJECTION_REASON_WAITING_PERIOD_FAIL,
     REJECTION_REASON_INVALID_ITEM_OR_SERVICE,
     REJECTION_REASON_TARGET_DATE,
+    REJECTION_REASON_MAX_CONSULTATIONS,
+    validate_target_date,
 )
 from django.test import TestCase
+from unittest import mock
 from insuree.test_helpers import create_test_insuree
 from location.test_helpers import create_test_health_facility
 
 from product.models import ProductItemOrService
+from medical.models import Service
 from medical.test_helpers import create_test_service, create_test_item
 from medical_pricelist.test_helpers import (
     add_service_to_hf_pricelist,
@@ -50,6 +54,9 @@ from product.test_helpers import (
     create_test_product_item,
 )
 from copy import copy
+from claim.validations import REJECTION_REASON_FAMILY, REJECTION_REASON_NO_COVERAGE
+from claim.validations import get_pricelist_detail
+from medical_pricelist.models import ItemsPricelistDetail
 
 import uuid
 
@@ -182,13 +189,44 @@ class ValidationTest(TestCase):
     #     service1.delete()
     #     claim.delete()
 
+    def test_validate_target_date_rejects_care_ending_after_claim_date(self):
+        # OP-3250: a claim saved before the entry check, or by another path, with
+        # care ending after the claim date is rejected on submission
+        day = datetime.now() - timedelta(days=3)
+        claim = create_test_claim(
+            custom_props={
+                "date_from": day,
+                "date_to": day + timedelta(days=2),
+                "date_claimed": day + timedelta(days=1),
+            },
+            product=self.product,
+        )
+        errors = validate_target_date(claim)
+        self.assertEqual([e["code"] for e in errors], [REJECTION_REASON_TARGET_DATE], errors)
+
+    def test_validate_target_date_accepts_care_ending_on_claim_date(self):
+        day = datetime.now() - timedelta(days=3)
+        claim = create_test_claim(
+            custom_props={
+                "date_from": day,
+                "date_to": day + timedelta(days=1),
+                "date_claimed": day + timedelta(days=1),
+            },
+            product=self.product,
+        )
+        self.assertEqual(validate_target_date(claim), [])
+
     def test_validate_pricelist_hf1(self):
         # When the claimitem points to a pricelist that doesn't correspond to the claim HF
-        hf_without_pricelist = create_test_health_facility(code="HF_NP")
-        hf_without_pricelist.items_pricelist = None
-        hf_without_pricelist.services_pricelist = None
-        self.assertIsNotNone(
-            hf_without_pricelist,
+        # The price lists have to be cleared through the helper: assigning them
+        # on the instance afterwards left the database rows untouched, so an
+        # HF_NP left over from an earlier run kept whatever price lists it had.
+        hf_without_pricelist = create_test_health_facility(
+            code="HF_NP",
+            custom_props={"items_pricelist": None, "services_pricelist": None},
+        )
+        self.assertIsNone(
+            hf_without_pricelist.items_pricelist,
             "This test requires a health facility without a price list item",
         )
         # Given
@@ -197,9 +235,18 @@ class ValidationTest(TestCase):
             {"health_facility_id": hf_without_pricelist.id}, product=self.product
         )
 
-        service1 = create_test_claimservice(claim, "S", custom_props={})
+        # Name the item and service explicitly. Left to choose, the helpers fall
+        # back to get_service_of_category/get_item_of_type, which return an
+        # arbitrary existing row -- under --keepdb, a leftover whose
+        # validity_from is later than this claim's target date, which is
+        # rejected for its date (code 9) before the price list is ever checked.
+        service1 = create_test_claimservice(
+            claim, "S", custom_props={"service": create_test_service("S")}
+        )
 
-        item1 = create_test_claimitem(claim, "D", True, custom_props={})
+        item1 = create_test_claimitem(
+            claim, "D", True, custom_props={"item": self.item_1}
+        )
         # When
         errors = validate_claim(claim, True)
         # Then
@@ -290,6 +337,84 @@ class ValidationTest(TestCase):
         self.assertEqual(len(errors), 2)
         self.assertEqual(errors[0]['code'], 1)  # claimed rejected because all services are rejected
         self.assertEqual(claim1.services.first().rejection_reason, 4)  # reason is wrong insuree mask
+
+    def _assert_claim_rejected(self, claim, reason):
+        # OP-3232: the claim and every one of its rows carry the reason of the
+        # first error, and the rows are Rejected, not Passed
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_REJECTED)
+        self.assertEqual(claim.rejection_reason, reason)
+        details = list(claim.items.filter(validity_to__isnull=True)) + list(
+            claim.services.filter(validity_to__isnull=True)
+        )
+        self.assertTrue(details)
+        for detail in details:
+            self.assertEqual(detail.rejection_reason, reason)
+            self.assertEqual(detail.status, ClaimDetail.STATUS_REJECTED)
+
+    def test_validate_claim_rejected_on_deleted_family(self):
+        insuree = create_test_insuree()
+        claim = create_test_claim({"insuree_id": insuree.id}, product=self.product)
+        create_test_claimservice(claim, "V", product=self.product)
+        create_test_claimitem(claim, "D", product=self.product)
+        insuree.family.validity_to = datetime.now()
+        insuree.family.save()
+        claim.refresh_from_db()
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual(errors[0]["code"], REJECTION_REASON_FAMILY)
+        self._assert_claim_rejected(claim, REJECTION_REASON_FAMILY)
+
+    def test_validate_claim_rejected_on_claim_date_before_care(self):
+        insuree = create_test_insuree()
+        date_from = datetime.now() - timedelta(days=2)
+        claim = create_test_claim(
+            {
+                "insuree_id": insuree.id,
+                "date_from": date_from,
+                "date_claimed": date_from - timedelta(days=1),
+            },
+            product=self.product,
+        )
+        create_test_claimservice(claim, "V", product=self.product)
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual(errors[0]["code"], REJECTION_REASON_TARGET_DATE)
+        self._assert_claim_rejected(claim, REJECTION_REASON_TARGET_DATE)
+
+    def test_validate_claim_rejected_on_care_end_before_start(self):
+        # OP-3239: a claim stored with its care ending before it starts (saved
+        # before entry validation existed, or by another path) is rejected at
+        # submission, not checked
+        insuree = create_test_insuree()
+        date_from = datetime.now() - timedelta(days=2)
+        claim = create_test_claim(
+            {
+                "insuree_id": insuree.id,
+                "date_from": date_from,
+                "date_to": date_from - timedelta(days=1),
+                "date_claimed": date_from,
+            },
+            product=self.product,
+        )
+        create_test_claimservice(claim, "V", product=self.product)
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual([e["code"] for e in errors[:1]], [REJECTION_REASON_TARGET_DATE])
+        self._assert_claim_rejected(claim, REJECTION_REASON_TARGET_DATE)
+
+    def test_validate_claim_rejected_without_policy(self):
+        insuree = create_test_insuree()
+        claim = create_test_claim({"insuree_id": insuree.id})
+        create_test_claimservice(claim, "V")
+
+        errors = validate_claim(claim, True)
+
+        self.assertEqual(errors[0]["code"], REJECTION_REASON_NO_COVERAGE)
+        self._assert_claim_rejected(claim, REJECTION_REASON_NO_COVERAGE)
 
     def test_validate_late_policy(self):
         # When the insuree already reaches his limit of visits
@@ -1175,10 +1300,6 @@ class ValidationTest(TestCase):
         self.assertIsNone(claim1.validity_to)
 
     def test_set_status(self):
-        class DummyUser:
-            id_for_audit = -1
-            id = 1
-
         insuree = create_test_insuree()
         create_test_officer(
             villages=[insuree.current_village or insuree.family.location]
@@ -1188,7 +1309,7 @@ class ValidationTest(TestCase):
             product=self.product,
         )
         set_claims_status(
-            [claim.uuid], "feedback_status", Claim.FEEDBACK_SELECTED, user=DummyUser()
+            [claim.uuid], "feedback_status", Claim.FEEDBACK_SELECTED, user=self.user
         )
         claim.refresh_from_db()
         self.assertEqual(claim.feedback_status, Claim.FEEDBACK_SELECTED)
@@ -1376,6 +1497,44 @@ class ValidationTest(TestCase):
         print(f"There is the error: {errors}")
         self.assertEqual(len(errors), 0)
 
+    def _created_late_today(self, entity):
+        # A medical item or service created on the care date, late in the day: its
+        # validity_from is a timestamp after the care date's midnight.
+        entity.validity_from = datetime.combine(date.today(), time(23, 0))
+        entity.save()
+        return entity
+
+    def test_validate_claimitem_created_on_care_date(self):
+        # OP-3233: validity_from was compared with the care date at midnight, so an
+        # item created on the care date was rejected as not yet valid (reason 9).
+        item = self._created_late_today(create_test_item("D", valid=True))
+        claim = create_test_claim(
+            {"date_from": date.today(), "date_to": date.today(), "date_claimed": date.today()}
+        )
+        claim_item = create_test_claimitem(claim, custom_props={"item_id": item.id})
+
+        errors = validate_claim(claim, check_max=True)
+
+        self.assertNotIn(REJECTION_REASON_TARGET_DATE, [e["code"] for e in errors])
+        claim_item.refresh_from_db()
+        self.assertNotEqual(claim_item.rejection_reason, REJECTION_REASON_TARGET_DATE)
+
+    def test_validate_claimservice_created_on_care_date(self):
+        # OP-3233: same as test_validate_claimitem_created_on_care_date, for services
+        service = self._created_late_today(create_test_service("D", valid=True))
+        claim = create_test_claim(
+            {"date_from": date.today(), "date_to": date.today(), "date_claimed": date.today()}
+        )
+        claim_service = create_test_claimservice(
+            claim, custom_props={"service_id": service.id}
+        )
+
+        errors = validate_claim(claim, check_max=True)
+
+        self.assertNotIn(REJECTION_REASON_TARGET_DATE, [e["code"] for e in errors])
+        claim_service.refresh_from_db()
+        self.assertNotEqual(claim_service.rejection_reason, REJECTION_REASON_TARGET_DATE)
+
     def test_validate_claimitem_future_validity(self):
         # Given
         future_date = date.today() + timedelta(days=30)
@@ -1383,7 +1542,9 @@ class ValidationTest(TestCase):
         item_future.validity_from = future_date
         item_future.save()
 
-        claim = create_test_claim({"date_from": date.today(), "date_to": date.today()})
+        claim = create_test_claim(
+            {"date_from": date.today(), "date_to": date.today(), "date_claimed": date.today()}
+        )
         claim_item = create_test_claimitem(
             claim, custom_props={"item_id": item_future.id}
         )
@@ -1416,7 +1577,13 @@ class ValidationTest(TestCase):
         service_future.save()
         insuree = create_test_insuree()
         claim = create_test_claim(
-            {"insuree": insuree, "date_from": date.today(), "date_to": date.today()}
+            {
+                "insuree": insuree,
+                "date_from": date.today(),
+                "date_to": date.today(),
+                "date_claimed": date.today(),
+            },
+            product=self.product,
         )
         claim_service = create_test_claimservice(
             claim, custom_props={"service_id": service_future.id}
@@ -1438,3 +1605,165 @@ class ValidationTest(TestCase):
         claim_service.delete()
         claim.delete()
         service_future.delete()
+
+    def _create_consultation_over_limit(self, products):
+        # An insuree covered by one policy per product, each product allowing a single
+        # consultation, and a first consultation claim already checked.
+        insuree = create_test_insuree()
+        for product in products:
+            create_test_policy2(product, insuree, link=True)
+        service = create_test_service(Service.CATEGORY_CONSULTATION)
+        first_claim = create_test_claim({"insuree_id": insuree.id})
+        create_test_claimservice(
+            first_claim, custom_props={"service_id": service.id}, product=products[0]
+        )
+        mark_test_claim_as_processed(first_claim)
+        self.assertEqual(first_claim.category, Service.CATEGORY_CONSULTATION)
+
+        second_claim = create_test_claim(
+            {"insuree_id": insuree.id, "health_facility": first_claim.health_facility}
+        )
+        create_test_claimservice(
+            second_claim, custom_props={"service_id": service.id}
+        )
+        return second_claim
+
+    @mock.patch("claim.services.ClaimSubmitService._validate_user_hf")
+    def test_submit_claim_over_category_maximum(self, validate_user_hf):
+        # OP-3231: submit passes the policies as a QuerySet, on which the category
+        # check called .remove() and crashed instead of rejecting the claim.
+        validate_user_hf.return_value = True
+        product = create_test_product("MAXCONS", custom_props={"max_no_consultation": 1})
+        claim = self._create_consultation_over_limit([product])
+        user = mock.Mock(is_anonymous=False, id=1, id_for_audit=-1)
+        user.has_perms = mock.MagicMock(return_value=True)
+
+        claim, errors = ClaimSubmitService(user).submit_claim(claim)
+
+        claim.refresh_from_db()
+        self.assertIn(REJECTION_REASON_MAX_CONSULTATIONS, [e["code"] for e in errors])
+        self.assertEqual(claim.status, Claim.STATUS_REJECTED)
+        self.assertEqual(claim.rejection_reason, REJECTION_REASON_MAX_CONSULTATIONS)
+        for service in claim.services.filter(validity_to__isnull=True):
+            self.assertEqual(service.rejection_reason, REJECTION_REASON_MAX_CONSULTATIONS)
+
+    def test_validate_claim_over_category_maximum_on_every_policy(self):
+        # OP-3231: the category check removed policies from the list it iterated over,
+        # so with two policies over the limit the second was never checked and the
+        # claim was accepted.
+        products = [
+            create_test_product(code, custom_props={"max_no_consultation": 1})
+            for code in ("MAXCON1", "MAXCON2")
+        ]
+        claim = self._create_consultation_over_limit(products)
+
+        errors = validate_claim(claim, True)
+
+        self.assertIn(REJECTION_REASON_MAX_CONSULTATIONS, [e["code"] for e in errors])
+
+
+class PricelistDetailAtDateTest(TestCase):
+    """
+    OP-3253: processing (process_dedrem -> get_pricelist_detail) must find the same
+    price-list row as validation, which compares validity by day (filter_validity).
+    A row saved during the care day used to be compared with its midnight and missed.
+    """
+
+    def setUp(self):
+        self.claim = create_test_claim()
+        self.item = create_test_item("D")
+        self.claimitem = create_test_claimitem(self.claim, "D", custom_props={"item_id": self.item.id})
+
+    def _detail(self, target_date):
+        return get_pricelist_detail(self.claim, self.claimitem, target_date, detail_is_item=True)
+
+    def test_row_saved_on_the_care_day_is_found(self):
+        detail = add_item_to_hf_pricelist(
+            self.item, self.claim.health_facility, custom_props={"validity_from": datetime.now()})
+        self.assertEqual(self._detail(date.today()), detail)
+        self.assertEqual(self._detail(datetime.now()), detail)
+
+    def test_row_saved_after_the_care_day_is_not_found(self):
+        add_item_to_hf_pricelist(
+            self.item, self.claim.health_facility, custom_props={"validity_from": datetime.now()})
+        self.assertIsNone(self._detail(date.today() - timedelta(days=1)))
+
+    def test_version_valid_on_the_care_day_is_picked(self):
+        current = add_item_to_hf_pricelist(
+            self.item, self.claim.health_facility, custom_props={"validity_from": datetime.now()})
+        replaced = ItemsPricelistDetail.objects.create(
+            items_pricelist=current.items_pricelist,
+            item=self.item,
+            validity_from=datetime.now() - timedelta(days=30),
+            validity_to=datetime.now() - timedelta(days=2),
+            legacy_id=current.id,
+            audit_user_id=1,
+        )
+        self.assertEqual(self._detail(date.today() - timedelta(days=10)), replaced)
+        self.assertEqual(self._detail(date.today()), current)
+
+
+class ProcessCheckedClaimDateProcessedTest(TestCase):
+    """A checked claim gets date_processed when it is processed, whether it
+    ends PROCESSED (relative prices) or VALUATED (fixed prices)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.user = create_test_interactive_user()
+
+    def _create_checked_claim(self, date_processed=None):
+        insuree = create_test_insuree()
+        product = create_test_product("DTPROC", custom_props={})
+        create_test_policy2(product, insuree, link=True)
+        service = create_test_service("V", custom_props={})
+        item = create_test_item("D", custom_props={})
+        claim = create_test_claim({"insuree_id": insuree.id})
+        claim.health_facility.care_type = claim.health_facility.CARE_TYPE_BOTH
+        claim.health_facility.save()
+        create_test_claimservice(
+            claim, custom_props={"service_id": service.id}, product=product
+        )
+        create_test_claimitem(
+            claim, "D", custom_props={"item_id": item.id}, product=product
+        )
+        errors = validate_claim(claim, True)
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        claim.status = Claim.STATUS_CHECKED
+        claim.date_processed = date_processed
+        claim.save()
+        return claim
+
+    def test_checked_claim_valuated_sets_date_processed(self):
+        claim = self._create_checked_claim()
+
+        errors = processing_claim(claim, self.user, is_process=True)
+
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_VALUATED)
+        self.assertEqual(claim.date_processed, date.today())
+
+    def test_checked_claim_with_relative_prices_sets_date_processed(self):
+        claim = self._create_checked_claim()
+        ClaimItem.objects.filter(claim=claim).update(
+            price_origin=ProductItemOrService.ORIGIN_RELATIVE
+        )
+
+        errors = processing_claim(claim, self.user, is_process=True)
+
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_PROCESSED)
+        self.assertEqual(claim.date_processed, date.today())
+
+    def test_checked_claim_keeps_existing_date_processed(self):
+        earlier = date.today() - timedelta(days=10)
+        claim = self._create_checked_claim(date_processed=earlier)
+
+        errors = processing_claim(claim, self.user, is_process=True)
+
+        self.assertEqual(len(errors), 0)
+        claim.refresh_from_db()
+        self.assertEqual(claim.status, Claim.STATUS_VALUATED)
+        self.assertEqual(claim.date_processed, earlier)
