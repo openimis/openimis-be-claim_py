@@ -12,6 +12,26 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Null out orphaned FK references before adding constraints so that
+        # pre-existing DB initialization data (e.g. demo dataset) with
+        # OfficerID / ClaimID values not present in their parent tables
+        # does not cause ForeignKeyViolation on the ALTER TABLE below.
+        migrations.RunSQL(
+            sql=(
+                'UPDATE "tblFeedbackPrompt" SET "OfficerID" = NULL '
+                'WHERE "OfficerID" IS NOT NULL '
+                'AND "OfficerID" NOT IN (SELECT "OfficerID" FROM "tblOfficer");'
+            ),
+            reverse_sql=migrations.RunSQL.noop,
+        ),
+        migrations.RunSQL(
+            sql=(
+                'UPDATE "tblFeedbackPrompt" SET "ClaimID" = NULL '
+                'WHERE "ClaimID" IS NOT NULL '
+                'AND "ClaimID" NOT IN (SELECT "ClaimID" FROM "tblClaim");'
+            ),
+            reverse_sql=migrations.RunSQL.noop,
+        ),
         migrations.AlterField(
             model_name="feedbackprompt",
             name="officer_id",
