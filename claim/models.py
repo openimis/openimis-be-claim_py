@@ -6,7 +6,7 @@ from core import models as core_models
 from django import dispatch
 from django.conf import settings
 from django.db import models
-from graphql import ResolveInfo
+from graphql import GraphQLResolveInfo
 from insuree import models as insuree_models
 from location import models as location_models
 from location.models import LocationManager
@@ -55,7 +55,7 @@ class Feedback(core_models.VersionedModel):
     def get_queryset(cls, queryset, user):
         queryset = cls.filter_queryset(queryset)
         # GraphQL calls with an info object while Rest calls with the user itself
-        if isinstance(user, ResolveInfo):
+        if isinstance(user, GraphQLResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
@@ -324,7 +324,7 @@ class Claim(core_models.VersionedModel, core_models.ExtendableModel):
     def get_queryset(cls, queryset, user):
         queryset = Claim.filter_queryset(queryset)
         # GraphQL calls with an info object while Rest calls with the user itself
-        if isinstance(user, ResolveInfo):
+        if isinstance(user, GraphQLResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
@@ -384,7 +384,7 @@ class FeedbackPrompt(core_models.VersionedModel):
     def get_queryset(cls, queryset, user):
         queryset = cls.filter_queryset(queryset)
         # GraphQL calls with an info object while Rest calls with the user itself
-        if isinstance(user, ResolveInfo):
+        if isinstance(user, GraphQLResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
             return queryset.filter(id=-1)
