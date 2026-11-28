@@ -24,7 +24,13 @@ from .gql_queries import (
     ClaimAttachmentTypeGQLType,
     ClaimGQLType,
     ClaimAttachmentGQLType,
+    ClaimDedRemGQLType,
+    ClaimDedRemStatusEnum,
+    ClaimDedRemSumGQLType,
 )
+from .services import filter_claim_dedrems, sum_claim_dedrems
+from graphene_django import DjangoConnectionField
+from django.core.exceptions import ValidationError
 from .gql_mutations import (
     DeleteClaimsMutation,
     ProcessClaimsMutation,
@@ -107,6 +113,59 @@ class Query(graphene.ObjectType):
         show_restored=graphene.Boolean(required=False),
         rejection_code=graphene.Int(required=False)
     )
+
+    claim_ded_rems = DjangoConnectionField(
+        ClaimDedRemGQLType,
+        claim_uuid=graphene.String(),
+        policy_uuid=graphene.String(),
+        insuree_uuid=graphene.String(),
+        status=graphene.List(ClaimDedRemStatusEnum),
+        description="Live DedRem rows of a claim, a policy or an insuree "
+        "(at least one of claimUuid, policyUuid, insureeUuid).",
+    )
+    claim_ded_rem_sum = graphene.Field(
+        ClaimDedRemSumGQLType,
+        policy_uuid=graphene.String(required=True),
+        insuree_uuid=graphene.String(),
+        status=graphene.List(ClaimDedRemStatusEnum),
+        date_to=graphene.Date(),
+        description="Sums of the live DedRem rows of a policy, optionally of one "
+        "insuree, some statuses, and claims whose reference date is on or before dateTo.",
+    )
+
+    @staticmethod
+    def _dedrem_statuses(status):
+        # graphene 2 passes the enum values, graphene 3 the enum members
+        return [getattr(s, "value", s) for s in status] if status else None
+
+    def resolve_claim_ded_rems(self, info, status=None, **kwargs):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        filters = {
+            key: kwargs.get(key)
+            for key in ("claim_uuid", "policy_uuid", "insuree_uuid")
+            if kwargs.get(key)
+        }
+        if not filters:
+            raise ValidationError(_("claim.dedrem.filter_required"))
+        return filter_claim_dedrems(
+            info, status=Query._dedrem_statuses(status), **filters
+        )
+
+    def resolve_claim_ded_rem_sum(
+        self, info, policy_uuid, insuree_uuid=None, status=None, date_to=None
+    ):
+        if not info.context.user.has_perms(ClaimConfig.gql_query_claims_perms):
+            raise PermissionDenied(_("unauthorized"))
+        return sum_claim_dedrems(
+            filter_claim_dedrems(
+                info,
+                policy_uuid=policy_uuid,
+                insuree_uuid=insuree_uuid,
+                status=Query._dedrem_statuses(status),
+                date_to=date_to,
+            )
+        )
 
     def resolve_insuree_name_by_chfid(self, info, **kwargs):
         # A nationwide lookup: it queries Insuree by CHFID with no location filter, so
