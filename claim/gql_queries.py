@@ -23,14 +23,48 @@ from core.schema import ClaimAdminGQLType
 from core.gql import ScopedQuerysetMixin
 
 
+ClaimDedRemStatusEnum = graphene.Enum(
+    "ClaimDedRemStatusEnum",
+    [
+        ("CHECKED", ClaimDedRem.STATUS_CHECKED),
+        ("REVIEWED", ClaimDedRem.STATUS_REVIEWED),
+        ("PROCESSED", ClaimDedRem.STATUS_PROCESSED),
+    ],
+    description="Stage of the claim when its DedRem row was computed.",
+)
+
+
 class ClaimDedRemGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     Details about Claim demands and remunerated amounts
     """
 
+    status = graphene.Field(ClaimDedRemStatusEnum)
+
+    def resolve_status(self, info):
+        return ClaimDedRemStatusEnum.get(self.status)
+
     class Meta:
         model = ClaimDedRem
         interfaces = (graphene.relay.Node,)
+
+
+class ClaimDedRemSumGQLType(graphene.ObjectType):
+    """
+    Sums of the deducted and remunerated amounts of the DedRem rows selected.
+    """
+
+    ded_g = graphene.Decimal()
+    ded_ip = graphene.Decimal()
+    ded_op = graphene.Decimal()
+    rem_g = graphene.Decimal()
+    rem_ip = graphene.Decimal()
+    rem_op = graphene.Decimal()
+    rem_consult = graphene.Decimal()
+    rem_surgery = graphene.Decimal()
+    rem_delivery = graphene.Decimal()
+    rem_hospitalization = graphene.Decimal()
+    rem_antenatal = graphene.Decimal()
 
 
 class ClaimGQLType(DjangoObjectType):

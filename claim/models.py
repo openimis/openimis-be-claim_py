@@ -823,7 +823,28 @@ class ClaimServiceService(core_models.RowSecurityMixin, models.Model):
 
 
 class ClaimDedRem(core_models.VersionedModel):
+    """
+    Deducted and remunerated amounts of one claim on one policy.
+
+    A working table: a claim has at most one live row per policy, deleted and
+    rewritten each time the claim's DedRem is computed, and deleted when the claim
+    is rejected, invalid or deleted. The row stores this claim's own amounts only;
+    the amounts of the previous claims are summed from the other rows.
+
+    ``status`` records the claim's stage when the row was computed, ordered
+    CHECKED < REVIEWED < PROCESSED.
+    """
+
     row_scope = core_models.ParentScope("policy")
+
+    STATUS_CHECKED = 1
+    STATUS_REVIEWED = 2
+    STATUS_PROCESSED = 3
+    STATUS_CHOICES = (
+        (STATUS_CHECKED, "Checked"),
+        (STATUS_REVIEWED, "Reviewed"),
+        (STATUS_PROCESSED, "Processed"),
+    )
 
     id = models.AutoField(db_column="ExpenditureID", primary_key=True)
 
@@ -886,6 +907,9 @@ class ClaimDedRem(core_models.VersionedModel):
     )
     rem_antenatal = models.DecimalField(
         db_column="RemAntenatal", max_digits=18, decimal_places=2, blank=True, null=True
+    )
+    status = models.SmallIntegerField(
+        db_column="Status", choices=STATUS_CHOICES, default=STATUS_CHECKED
     )
 
     audit_user_id = models.IntegerField(db_column="AuditUserID")

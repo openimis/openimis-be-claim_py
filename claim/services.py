@@ -29,10 +29,14 @@ from claim.utils import (
     get_valid_policies_qs,
     get_claim_target_date,
     approved_amount,
+    order_by_target_date,
 )
 from .validations import (
     validate_claim,
     get_claim_category,
+    process_dedrem,
+    delete_claim_dedrems,
+    DedRemBatch,
     REJECTION_REASON_INVALID_CLAIM,
 )
 from django.db.models import Subquery, F, OuterRef, Sum, FloatField
@@ -565,6 +569,8 @@ def claim_update(claim, data, user):
     set_reduced_attr(claim, data, ["items", "services"])
     from core.utils import TimeUtils
 
+    # an update is a new version of the claim (see dedrem_is_current)
+    claim.validity_from = TimeUtils.now()
     claim.items.update(validity_to=TimeUtils.now())
     claim.services.update(validity_to=TimeUtils.now())
     claim_create_items_and_services(claim, data, user)
@@ -734,15 +740,27 @@ def processing_claim(claim, user, is_process=False, validate=True):
         list: A list of errors encountered during processing. An empty list indicates successful processing.
 
     Notes:
-        - Retrieves valid policies for the claim's insuree based on the target date.
-        - Validates the claim and assigns products to claim items/services if `validate` is True.
-        - Processes deductions/remunerations (dedrem) if no errors occur.
-        - Clears dedrem if errors are found (e.g., invalid claim after review).
-        - Logs key steps (validation, assignment, dedrem processing) for debugging.
+        - A claim that is not checked yet (submission) is validated, products are
+          assigned to its items and services, and its DedRem is computed.
+        - A checked claim was validated at submission: on review delivery and on
+          processing only its DedRem is recomputed, at the stage it reaches
+          (reviewed, or processed with `is_process`, which writes the deducted and
+          remunerated amounts). The recompute is skipped when nothing changed on
+          the claim since its DedRem was written (dedrem_is_current); processing
+          sets its stamps first, so it always recomputes.
+        - When errors are found (e.g. invalid claim after review), the DedRem is
+          deleted and the later claims that counted it are recalculated.
         - If `is_process` is True, updates the claim status to processed or valuated.
     """
     errors = []
     target_date = get_claim_target_date(claim)
+    if is_process:
+        # processing is a stage change: stamp it before the DedRem is recomputed
+        from core.utils import TimeUtils
+
+        now = TimeUtils.now()
+        claim.process_stamp = now
+        claim.validity_from = now
     if claim.insuree is not None:
         policies = get_valid_policies_qs(claim.insuree.id, target_date)
     else:
@@ -768,11 +786,14 @@ def processing_claim(claim, user, is_process=False, validate=True):
                 claim.uuid,
                 str(errors)
             )
+    elif claim.status == Claim.STATUS_CHECKED:
+        if dedrem_is_current(claim):
+            logger.debug("claim %s unchanged since its DedRem, not recomputed", claim.uuid)
+        else:
+            errors = process_dedrem(claim, user, is_process=is_process)
     if len(errors) > 0:
         # OMT-208 the claim is invalid. If there is a dedrem, we need to clear it (caused by a review)
-        deleted_dedrems = ClaimDedRem.objects.filter(
-            claim=claim,
-        ).delete()
+        deleted_dedrems = delete_claim_dedrems(claim, user)
         if deleted_dedrems:
             logger.debug(
                 f"Claim {claim.uuid} is invalid, we deleted its dedrem ({deleted_dedrems})"
@@ -784,6 +805,31 @@ def processing_claim(claim, user, is_process=False, validate=True):
         else:
             errors += result
     return errors
+
+
+def dedrem_is_current(claim):
+    """
+    True when the claim has DedRem rows and all of them were written after the
+    claim last changed: after max(validity_from, validity_from_review,
+    submit_stamp, process_stamp). Its own recompute is then useless, since a
+    DedRem only changes with the claim or with its previous claims, and the
+    latter is handled by recalculate_later_dedrems.
+    """
+    rows = list(ClaimDedRem.objects.filter(claim_id=claim.id, *ClaimDedRem.filter_validity()))
+    stamps = [
+        stamp
+        for stamp in (
+            claim.validity_from,
+            claim.validity_from_review,
+            claim.submit_stamp,
+            claim.process_stamp,
+        )
+        if stamp
+    ]
+    if not rows or not stamps:
+        return False
+    last_change = max(stamps)
+    return all(row.validity_from > last_change for row in rows)
 
 
 # refactor back compatibility
@@ -958,6 +1004,55 @@ def set_feedback_prompt_validity_to_to_current_date(claim_uuid):
         return "No such feedback prompt exist."
 
 
+DEDREM_SUM_FIELDS = (
+    "ded_g",
+    "ded_ip",
+    "ded_op",
+    "rem_g",
+    "rem_ip",
+    "rem_op",
+    "rem_consult",
+    "rem_surgery",
+    "rem_delivery",
+    "rem_hospitalization",
+    "rem_antenatal",
+)
+
+
+def filter_claim_dedrems(
+    user,
+    claim_uuid=None,
+    policy_uuid=None,
+    insuree_uuid=None,
+    status=None,
+    date_to=None,
+):
+    """
+    The live DedRem rows the user may see (ClaimDedRem.row_scope), filtered by
+    claim, policy, insuree, statuses (ClaimDedRem.STATUS_*) and, with `date_to`,
+    claims whose reference date is on or before it.
+    """
+    queryset = ClaimDedRem.objects.filter(*ClaimDedRem.filter_validity())
+    if claim_uuid:
+        queryset = queryset.filter(claim__uuid__iexact=str(claim_uuid))
+    if policy_uuid:
+        queryset = queryset.filter(policy__uuid__iexact=str(policy_uuid))
+    if insuree_uuid:
+        queryset = queryset.filter(insuree__uuid__iexact=str(insuree_uuid))
+    if status:
+        queryset = queryset.filter(status__in=status)
+    if date_to:
+        queryset = queryset.annotate(
+            claim_target_date=Coalesce("claim__date_to", "claim__date_from")
+        ).filter(claim_target_date__lte=date_to)
+    return ClaimDedRem.get_queryset(queryset, user)
+
+
+def sum_claim_dedrems(queryset):
+    """Sums of DEDREM_SUM_FIELDS over the DedRem rows of `queryset`."""
+    return queryset.aggregate(**{field: Sum(field) for field in DEDREM_SUM_FIELDS})
+
+
 def update_claims_dedrems(uuids, user, claims=None):
     # We could do it in one query with filter(claim__uuid__in=uuids) but we'd loose the logging
 
@@ -969,11 +1064,21 @@ def update_claims_dedrems(uuids, user, claims=None):
     errors = []
 
     remaining_uuid = list(map(UUID, uuids)) if uuids else []
-    for claim in claims:
-        if uuids:
-            remaining_uuid.remove(UUID(claim.uuid))
-        logger.debug(f"delivering review on {claim.uuid}, reprocessing dedrem ({user})")
-        errors += processing_claim(claim, user, False)
+    from core.utils import TimeUtils
+
+    # earlier claims first, so a later claim counts them once they are settled; the
+    # later claims outside the batch are recalculated once, when the batch ends
+    with DedRemBatch(user):
+        for claim in order_by_target_date(claims):
+            if uuids:
+                remaining_uuid.remove(UUID(claim.uuid))
+            logger.debug(f"delivering review on {claim.uuid}, reprocessing dedrem ({user})")
+            # review delivery is a stage change: stamp it before the DedRem is recomputed
+            now = TimeUtils.now()
+            claim.validity_from_review = now
+            claim.validity_from = now
+            claim.save()
+            errors += processing_claim(claim, user, False)
     if len(remaining_uuid):
         errors.append(
             _("claim.validation.id_does_not_exist") % {"id": ",".join(remaining_uuid)}
