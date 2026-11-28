@@ -66,6 +66,21 @@ def get_claim_target_date(claim):
     return claim.date_to if claim.date_to else claim.date_from
 
 
+def order_by_target_date(claims):
+    """
+    Claims in ascending reference date (get_claim_target_date), then id, so a batch
+    settles an earlier claim's DedRem before a later claim counts it. Takes a
+    queryset or any iterable of claims.
+    """
+    if hasattr(claims, "annotate"):
+        from django.db.models.functions import Coalesce
+
+        return claims.annotate(
+            target_date_order=Coalesce("date_to", "date_from")
+        ).order_by("target_date_order", "id")
+    return sorted(claims, key=lambda claim: (get_claim_target_date(claim), claim.id))
+
+
 def generic_amount_claimdetail(elt):
     return (
         elt.get("price_approved") or elt.get("price_adjusted") or elt.get("price_asked")

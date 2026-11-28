@@ -65,11 +65,33 @@ def initialize_dedrem_processing(claim, services):
     return errors, target_date, category, hospitalization, hf_level
 
 
-def archive_old_dedrems(claim):
-    """Archive existing dedrems for the claim."""
-    ClaimDedRem.objects.filter(claim_id=claim.id, *ClaimDedRem.filter_validity()).update(
-        validity_to=datetime.now()
-    )
+def delete_old_dedrems(claim):
+    """
+    Delete the claim's DedRem rows (DedRem is a working table, rows are never
+    archived) and return {policy_id: (policy, status)} of the deleted live rows,
+    so the caller can recalculate the claims that counted them.
+    """
+    rows = ClaimDedRem.objects.filter(claim_id=claim.id)
+    deleted = {
+        row.policy_id: (row.policy, row.status)
+        for row in rows.filter(*ClaimDedRem.filter_validity()).select_related(
+            "policy__product"
+        )
+    }
+    rows.delete()
+    return deleted
+
+
+def delete_claim_dedrems(claim, user=None):
+    """
+    Delete the DedRem rows of a rejected, invalid or deleted claim, then
+    recalculate the later claims that counted them (see recalculate_later_dedrems).
+    """
+    deleted = delete_old_dedrems(claim)
+    if deleted:
+        logger.debug(f"claim {claim.uuid}: DedRem deleted on {list(deleted)}")
+        recalculate_later_dedrems(claim, deleted, user)
+    return deleted
 
 
 def fetch_policies(claim, target_date, policies=None):
@@ -177,16 +199,153 @@ def initialize_deductibles_and_ceilings():
     }
 
 
-def fetch_previous_dedrems(claim, policy_id):
-    """Retrieve previous dedrems excluding current claim."""
-    return list(
-        ClaimDedRem.objects.filter(policy_id=policy_id).exclude(claim_id=claim.id)
+DEDREM_PREFIXES = ("ded", "max", "ded_ip", "ded_op", "max_ip", "max_op")
+DEDREM_LEVELS = ("treatment", "insuree", "policy")
+DEDREM_SCOPE_INSUREE = "insuree"
+DEDREM_SCOPE_POLICY = "policy"
+
+
+def get_dedrem_level(product, prefix):
+    """
+    Level at which the product sets the limit `prefix` (see _get_dedrem):
+    "treatment", "insuree", "policy", or None when the product sets none.
+    The first level set wins, in that order.
+    """
+    for level in DEDREM_LEVELS:
+        if getattr(product, f"{prefix}_{level}", None):
+            return level
+    return None
+
+
+def get_dedrem_scope(product):
+    """
+    Rows that _get_dedrem draws `prev` from, for any deductible or ceiling of the
+    product: DEDREM_SCOPE_POLICY (every claim on the policy), DEDREM_SCOPE_INSUREE
+    (the claims of the same insuree on the policy) or None (no limit, or only
+    per-treatment limits, which never look at other claims). The deductible and
+    ceiling levels can differ, so this is the union over all of them.
+    """
+    levels = {get_dedrem_level(product, prefix) for prefix in DEDREM_PREFIXES}
+    if DEDREM_SCOPE_POLICY in levels:
+        return DEDREM_SCOPE_POLICY
+    if DEDREM_SCOPE_INSUREE in levels:
+        return DEDREM_SCOPE_INSUREE
+    return None
+
+
+def get_dedrem_status(claim, is_process=False):
+    """The ClaimDedRem.status of a DedRem computed now for the claim."""
+    if is_process:
+        return ClaimDedRem.STATUS_PROCESSED
+    if claim.review_status == Claim.REVIEW_DELIVERED:
+        return ClaimDedRem.STATUS_REVIEWED
+    return ClaimDedRem.STATUS_CHECKED
+
+
+def split_dedrems(claim, status, policy, product):
+    """
+    Split the other claims' live DedRem rows on `policy` into
+    (previous, to_recalculate), for `claim` computed at `status`.
+
+    Both lists are taken from the same rows: those in the scope of
+    get_dedrem_scope(product) (the whole policy, the claim's insuree on the
+    policy, or none), excluding the claim itself.
+
+    - previous: the rows counted as already consumed. A checked claim counts
+      checked, reviewed and processed rows; a reviewed claim counts reviewed and
+      processed rows; a processed claim counts processed rows only
+      (row status >= status).
+    - to_recalculate: the rows that counted this claim and must be recomputed
+      after it changed: status <= status, never processed (neither the row nor
+      the claim), and a reference date (get_claim_target_date) later than this
+      claim's. Sorted by reference date, then claim id.
+    """
+    scope = get_dedrem_scope(product)
+    if scope is None:
+        return [], []
+    rows = (
+        ClaimDedRem.objects.filter(policy_id=policy.id, *ClaimDedRem.filter_validity())
+        .exclude(claim_id=claim.id)
+        .select_related("claim")
     )
+    if scope == DEDREM_SCOPE_INSUREE:
+        rows = rows.filter(insuree_id=claim.insuree_id)
+    rows = list(rows)
+    previous = [row for row in rows if row.status >= status]
+    target_date = get_claim_target_date(claim)
+    to_recalculate = [
+        row
+        for row in rows
+        if row.status <= status
+        and row.status != ClaimDedRem.STATUS_PROCESSED
+        and row.claim.validity_to is None
+        and row.claim.status not in (Claim.STATUS_PROCESSED, Claim.STATUS_VALUATED)
+        and get_claim_target_date(row.claim) > target_date
+    ]
+    to_recalculate.sort(key=lambda row: (get_claim_target_date(row.claim), row.claim_id))
+    return previous, to_recalculate
+
+
+def fetch_previous_dedrems(claim, policy, product, status):
+    """
+    The other claims' DedRem rows that `claim`, computed at `status`, counts as
+    previous consumption on `policy` (see split_dedrems for the rules).
+    """
+    return split_dedrems(claim, status, policy, product)[0]
+
+
+def recalculate_later_dedrems(claim, scopes, user=None):
+    """
+    Recompute the DedRem of the claims that counted `claim`, after its DedRem was
+    computed or deleted.
+
+    `scopes` is {policy_id: (policy, status)}: the policies the claim had or has a
+    row on, with the highest stage involved. The claims to recompute are those
+    split_dedrems returns as to_recalculate on any of them. They are recomputed
+    once each, in reference date order, at the stage their row already had, and
+    without cascading further. A processed or valuated claim is never touched.
+    """
+    candidates = {}
+    for policy, status in scopes.values():
+        _, to_recalculate = split_dedrems(claim, status, policy, policy.product)
+        for row in to_recalculate:
+            candidates.setdefault(row.claim_id, row)
+    for row in sorted(
+        candidates.values(),
+        key=lambda r: (get_claim_target_date(r.claim), r.claim_id),
+    ):
+        later_claim = Claim.objects.get(id=row.claim_id)
+        logger.debug(
+            f"claim {claim.uuid} changed: recalculating DedRem of claim {later_claim.uuid}"
+        )
+        process_dedrem(later_claim, user, status=row.status, cascade=False)
 
 
 def calculate_deductibles_and_ceilings(
     product, claim, demrems, hospital_visit, policy_members
 ):
+    """
+    Deductible and ceiling that apply to the claim on one policy, and what the
+    previous claims already consumed of them.
+
+    For each limit, _get_dedrem gives (amount, type, prev) at the level the
+    product sets:
+
+    - general limits first: deductible "ded" on field ded_g, ceiling "max" on
+      field rem_g, type G;
+    - when the product sets no general deductible (or ceiling), the in-patient
+      one (ded_ip / max_ip on ded_ip / rem_ip, type I) applies to a hospital
+      visit (calculate_hospital_visit) and the out-patient one (ded_op / max_op
+      on ded_op / rem_op, type O) to any other claim;
+    - a policy-level ceiling (max_policy, max_ip_policy, max_op_policy) grows
+      with the members above the product threshold (max_policy_extra_member*)
+      and is capped by max_ceiling_policy*.
+
+    `demrems` are the previous rows (fetch_previous_dedrems). Returns the
+    tracking dict of initialize_deductibles_and_ceilings, with "deductible" and
+    "ceiling" set to Deductible tuples and "prev_deductible" and
+    "prev_remunerated" to the amounts already consumed.
+    """
     deductibles = initialize_deductibles_and_ceilings()
     ded_g = _get_dedrem("ded", "G", "ded_g", product, claim.insuree, demrems)
     if ded_g:
@@ -627,8 +786,18 @@ def update_claim_detail(claim_detail, is_process, result, relative_prices):
     return relative_prices
 
 
-def create_claim_dedrem(claim, policy, user, deductibles, hospital_visit):
-    """Create new ClaimDedRem record."""
+def create_claim_dedrem(
+    claim, policy, user, deductibles, hospital_visit, status=ClaimDedRem.STATUS_CHECKED
+):
+    """
+    Write the claim's DedRem row on one policy, at `status`.
+
+    The row holds this claim's own amounts only: deducted in ded_g and remunerated
+    in rem_g, repeated in ded_ip/rem_ip for a hospital visit or in ded_op/rem_op
+    otherwise, and the remunerated amount per service category (rem_consult,
+    rem_surgery, ...). The previous claims' consumption (prev) is not stored: it is
+    summed from their own rows each time.
+    """
     now = datetime.now()
     claim_ded_rem_to_create = {
         "policy": policy,
@@ -643,6 +812,7 @@ def create_claim_dedrem(claim, policy, user, deductibles, hospital_visit):
         "rem_surgery": deductibles["remunerated_surgery"],
         "audit_user_id": getattr(user, "id_for_audit", -1),
         "validity_from": now,
+        "status": status,
     }
     if hospital_visit:
         claim_ded_rem_to_create["ded_ip"] = deductibles["deducted"]
@@ -679,7 +849,8 @@ def update_claim_status(claim, is_process, deductibles, user, products_id):
             claim.remunerated = deductibles["remunerated"]
         claim.audit_user_id_process = getattr(user, "id_for_audit", -1)
         claim.process_stamp = now
-        claim.date_processed = now
+        # keep a processing date already set, as set_claim_processed_or_valuated does
+        claim.date_processed = claim.date_processed or now
         if claim.feedback_status == Claim.FEEDBACK_SELECTED:
             claim.feedback_status = Claim.FEEDBACK_BYPASSED
         if claim.review_status == Claim.REVIEW_SELECTED:
@@ -968,13 +1139,42 @@ def process_dedrem(
     product_item_tuple_dict=None,
     product_service_tuple_dict=None,
     root_services=None,
+    status=None,
+    cascade=True,
 ):
+    """
+    Compute the claim's deductibles and ceilings (DedRem) and write its rows.
+
+    For each policy covering the claim's items and services:
+
+    1. the previous consumption is read from the other claims' rows
+       (fetch_previous_dedrems): which rows count depends on `status`, see
+       split_dedrems;
+    2. calculate_deductibles_and_ceilings gives the deductible and ceiling left;
+    3. each passed item and service is valuated against them (process_claim_detail);
+       with `is_process`, the deducted, exceeding and remunerated amounts are
+       written on the details and the claim becomes processed or valuated
+       (update_claim_status);
+    4. one ClaimDedRem row is written for the claim on that policy
+       (create_claim_dedrem), at `status`.
+
+    The claim's previous rows are deleted first. `status` defaults to the claim's
+    stage (get_dedrem_status). With `cascade`, the later claims that counted this
+    claim are then recalculated (recalculate_later_dedrems); the recalculation
+    itself runs without cascade.
+
+    Returns the list of errors.
+    """
+    if status is None:
+        status = get_dedrem_status(claim, is_process)
     errors, target_date, category, hospitalization, hf_level = (
         initialize_dedrem_processing(claim, root_services)
     )
-    archive_old_dedrems(claim)
+    scopes = delete_old_dedrems(claim)
     policies = fetch_policies(claim, target_date, policies)
     if not policies:
+        if cascade and scopes:
+            recalculate_later_dedrems(claim, scopes, user)
         return [
             {
                 "code": REJECTION_REASON_NO_COVERAGE,
@@ -1028,7 +1228,7 @@ def process_dedrem(
         product = policy.product
         hospital_visit = calculate_hospital_visit(product, hospitalization, hf_level)
         policy_members = get_policy_members(policy_id, target_date)
-        demrems = fetch_previous_dedrems(claim, policy_id)
+        demrems = fetch_previous_dedrems(claim, policy, product, status)
         deductibles = calculate_deductibles_and_ceilings(
             product, claim, demrems, hospital_visit, policy_members
         )
@@ -1070,11 +1270,15 @@ def process_dedrem(
             deductibles["relative_prices"] = update_claim_detail(
                 claim_detail, is_process, result, deductibles["relative_prices"]
             )
-        create_claim_dedrem(claim, policy, user, deductibles, hospital_visit)
+        create_claim_dedrem(claim, policy, user, deductibles, hospital_visit, status)
         merge_deductible(claim_deductibles, deductibles)
+        previous_status = scopes.get(policy.id, (policy, status))[1]
+        scopes[policy.id] = (policy, max(status, previous_status))
     errors.extend(
         update_claim_status(claim, is_process, claim_deductibles, user, products_id)
     )
+    if cascade and scopes:
+        recalculate_later_dedrems(claim, scopes, user)
     return errors
 
 
@@ -2041,11 +2245,26 @@ def get_claim_category(claim, services=None):
 
 
 def _get_dedrem(prefix, dedrem_type, field, product, insuree, demrems):
+    """
+    Deductible or ceiling `prefix` of the product, as Deductible(amount, type, prev).
+
+    `prefix` is "ded" or "max" (general), or "ded_ip", "ded_op", "max_ip",
+    "max_op" (in-patient / out-patient); `dedrem_type` is G, I or O accordingly,
+    and `field` the ClaimDedRem field summed for prev (ded_g, rem_g, ded_ip, ...).
+    The first level the product sets applies:
+
+    - <prefix>_treatment: per claim, prev = 0;
+    - <prefix>_insuree: prev = sum of `field` over the previous rows of this insuree;
+    - <prefix>_policy: prev = sum of `field` over all previous rows of the policy.
+
+    `demrems` are the previous rows (fetch_previous_dedrems). Returns None when the
+    product sets no such limit.
+    """
     if getattr(product, prefix + "_treatment", None):
         return Deductible(getattr(product, prefix + "_treatment", None), dedrem_type, 0)
     if getattr(product, prefix + "_insuree", None):
         prev = sum(
-            [getattr(dr, field, 0) for dr in demrems if dr.insuree_id == insuree.id]
+            [getattr(dr, field, 0) or 0 for dr in demrems if dr.insuree_id == insuree.id]
         )
         return Deductible(
             getattr(product, prefix + "_insuree", None),
@@ -2053,7 +2272,7 @@ def _get_dedrem(prefix, dedrem_type, field, product, insuree, demrems):
             prev if prev else 0,
         )
     if getattr(product, prefix + "_policy", None):
-        prev = sum([getattr(dr, field, 0) for dr in demrems])
+        prev = sum([getattr(dr, field, 0) or 0 for dr in demrems])
         return Deductible(
             getattr(product, prefix + "_policy", None), dedrem_type, prev if prev else 0
         )

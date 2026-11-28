@@ -404,12 +404,12 @@ class DedRemGraphQLTest(DedRemScenarioMixin, openIMISGraphQLTestCase):
         _, total = self._rows_and_sum(policy)
         data = self._gql(
             'query { claimDedRemSum(%s, dateTo: "%s") { remG } }'
-            % (policy, days_ago(9).isoformat())
+            % (policy, days_ago(10).isoformat())
         )
-        # The claim of 8 days ago is left out.
-        self.assertLess(
-            Decimal(str(data["claimDedRemSum"]["remG"])), Decimal(str(total["remG"]))
-        )
+        # Only the claim of 10 days ago (700) is counted, not the processed one of
+        # 9 days ago (700) nor the one of 8 days ago (0, the ceiling being reached).
+        self.assertEqual(Decimal(str(total["remG"])), 1400)
+        self.assertEqual(Decimal(str(data["claimDedRemSum"]["remG"])), 700)
 
     def test_rows_by_claim(self):
         claim = Claim.objects.filter(insuree=self.other_insuree).first()

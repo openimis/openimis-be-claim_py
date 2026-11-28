@@ -32,6 +32,7 @@ from medical.models import Item, Service
 
 from claim.utils import (
     approved_amount,
+    order_by_target_date,
 )
 from claim.services import (
     validate_claim_data as service_validate_claim_data,
@@ -43,7 +44,7 @@ from claim.services import (
     set_feedback_prompt_validity_to_to_current_date,
     set_claims_status,
 )
-from claim.validations import REJECTION_REASON_INVALID_CLAIM
+from claim.validations import REJECTION_REASON_INVALID_CLAIM, delete_claim_dedrems
 from django.db import transaction
 
 logger = logging.getLogger(__name__)
@@ -732,7 +733,8 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
             )
             remaining_uuid = list(map(str.upper, uuids))
 
-        for claim in claims:
+        # earlier claims first, so a later claim counts them once they are settled
+        for claim in order_by_target_date(claims):
             if remaining_uuid:
                 remaining_uuid.remove(claim.uuid.upper())
             subm_claim, error = service.submit_claim(claim, user)
@@ -1149,7 +1151,8 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
             )
         )
         remaining_uuid = list(map(str.upper, uuids))
-        for claim in claims:
+        # earlier claims first, so a later claim counts them once they are settled
+        for claim in order_by_target_date(claims):
             remaining_uuid.remove(claim.uuid.upper())
             logger.debug("ProcessClaimsMutation: processing %s", claim.uuid)
             c_errors = []
@@ -1229,15 +1232,20 @@ class DeleteClaimsMutation(OpenIMISMutation):
                     ],
                 })
                 continue
-            errors += set_claim_deleted(claim)
+            errors += set_claim_deleted(claim, user)
         if len(errors) == 1:
             errors = errors[0]["list"]
         return errors
 
 
-def set_claim_deleted(claim):
+def set_claim_deleted(claim, user=None):
+    """
+    Mark the claim deleted, delete its DedRem rows and recalculate the later
+    claims that counted them.
+    """
     try:
         claim.delete_history()
+        delete_claim_dedrems(claim, user)
         return []
     except Exception as exc:
         logger.debug(exc)
