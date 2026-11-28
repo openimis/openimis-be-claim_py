@@ -823,7 +823,30 @@ class ClaimServiceService(core_models.RowSecurityMixin, models.Model):
 
 
 class ClaimDedRem(core_models.VersionedModel):
+    """
+    Deducted and remunerated amounts of one claim on one policy.
+
+    A working table: a claim has at most one live row per policy, deleted and
+    rewritten each time the claim's DedRem is computed, and deleted when the claim
+    is rejected, invalid or deleted. The row stores this claim's own amounts only;
+    the amounts of the previous claims are summed from the other rows.
+
+    ``status`` is the claim's stage, ordered CHECKED < REVIEWED < PROCESSED. In this
+    release it is derived from the claim (stage_of / stage_expression), not stored:
+    the row is recomputed at each stage change, so the claim's current stage is the
+    stage the row was computed at. (develop stores it in a Status column.)
+    """
+
     row_scope = core_models.ParentScope("policy")
+
+    STATUS_CHECKED = 1
+    STATUS_REVIEWED = 2
+    STATUS_PROCESSED = 3
+    STATUS_CHOICES = (
+        (STATUS_CHECKED, "Checked"),
+        (STATUS_REVIEWED, "Reviewed"),
+        (STATUS_PROCESSED, "Processed"),
+    )
 
     id = models.AutoField(db_column="ExpenditureID", primary_key=True)
 
@@ -887,6 +910,44 @@ class ClaimDedRem(core_models.VersionedModel):
     rem_antenatal = models.DecimalField(
         db_column="RemAntenatal", max_digits=18, decimal_places=2, blank=True, null=True
     )
+
+    @classmethod
+    def stage_of(cls, claim):
+        """The DedRem stage of a claim: processed (processed or valuated), reviewed
+        (checked with its review delivered), otherwise checked."""
+        if claim.status >= Claim.STATUS_PROCESSED:
+            return cls.STATUS_PROCESSED
+        if (
+            claim.status == Claim.STATUS_CHECKED
+            and claim.review_status == Claim.REVIEW_DELIVERED
+        ):
+            return cls.STATUS_REVIEWED
+        return cls.STATUS_CHECKED
+
+    @classmethod
+    def stage_expression(cls, prefix="claim__"):
+        """stage_of as a query expression, for a queryset reaching the claim
+        through `prefix`."""
+        return models.Case(
+            models.When(
+                **{f"{prefix}status__gte": Claim.STATUS_PROCESSED},
+                then=models.Value(cls.STATUS_PROCESSED),
+            ),
+            models.When(
+                **{
+                    f"{prefix}status": Claim.STATUS_CHECKED,
+                    f"{prefix}review_status": Claim.REVIEW_DELIVERED,
+                },
+                then=models.Value(cls.STATUS_REVIEWED),
+            ),
+            default=models.Value(cls.STATUS_CHECKED),
+            output_field=models.IntegerField(),
+        )
+
+    @property
+    def status(self):
+        """The stage of the row's claim (see stage_of)."""
+        return ClaimDedRem.stage_of(self.claim)
 
     audit_user_id = models.IntegerField(db_column="AuditUserID")
 
