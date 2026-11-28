@@ -318,14 +318,43 @@ class DedRemCascadeTest(DedRemScenarioMixin, TestCase):
 
 @override_settings(ROW_SECURITY=False)
 class DedRemBatchOrderTest(DedRemScenarioMixin, TestCase):
+    """
+    A batch handles its claims in reference date order: each claim counts the
+    earlier claims of the batch as they were just settled, with no cascade inside
+    the batch. One cascade at the end recalculates the later claims outside it.
+    """
+
     def _submit_later_claim_first(self):
         # B is created and submitted before A, so a batch in id order handles B first.
         claim_b = self.submit(self.make_claim(8))
         claim_a = self.submit(self.make_claim(10))
-        return claim_a, claim_b
+        # C is later than both and stays outside the batch.
+        claim_c = self.submit(self.make_claim(6))
+        return claim_a, claim_b, claim_c
+
+    def _count_dedrem_computations(self):
+        """Patches process_dedrem where it is called and returns its call counter."""
+        from claim import services, validations
+
+        original = validations.process_dedrem
+        counter = mock.Mock(side_effect=original)
+        for module in (services, validations):
+            patcher = mock.patch.object(module, "process_dedrem", counter)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return counter
+
+    def assert_computed_once(self, counter, claims):
+        computed = [call.args[0].id for call in counter.call_args_list]
+        for claim in claims:
+            self.assertEqual(
+                computed.count(claim.id), 1, f"claim {claim.code} computed {computed.count(claim.id)} times"
+            )
 
     def test_process_batch_handles_claims_by_reference_date(self):
-        claim_a, claim_b = self._submit_later_claim_first()
+        claim_a, claim_b, claim_c = self._submit_later_claim_first()
+        outside_row = self.row(claim_c)
+        counter = self._count_dedrem_computations()
 
         # The submission statistics need a MutationLog row; they are not under test.
         with mock.patch.object(ProcessClaimsMutation, "add_submission_stats_to_mutation_log"):
@@ -337,18 +366,25 @@ class DedRemBatchOrderTest(DedRemScenarioMixin, TestCase):
         # A (earlier) is settled first; B then counts A as processed.
         self.assertEqual(self.row(claim_a).rem_g, 700)
         self.assertEqual(self.row(claim_b).rem_g, 300)
+        # Each batch claim is computed once, and C once, by the cascade at the end.
+        self.assert_computed_once(counter, [claim_a, claim_b, claim_c])
+        self.assertNotEqual(self.row(claim_c).id, outside_row.id)
 
     def test_review_delivery_batch_handles_claims_by_reference_date(self):
-        claim_a, claim_b = self._submit_later_claim_first()
+        claim_a, claim_b, claim_c = self._submit_later_claim_first()
+        outside_row = self.row(claim_c)
         set_claims_status(
             [claim_b.uuid, claim_a.uuid], "review_status", Claim.REVIEW_DELIVERED
         )
+        counter = self._count_dedrem_computations()
 
         errors = update_claims_dedrems([claim_b.uuid, claim_a.uuid], self.user)
 
         self.assertEqual(errors, [])
         self.assertEqual(self.row(claim_a).rem_g, 700)
         self.assertEqual(self.row(claim_b).rem_g, 300)
+        self.assert_computed_once(counter, [claim_a, claim_b, claim_c])
+        self.assertNotEqual(self.row(claim_c).id, outside_row.id)
 
 
 DEDREM_FIELDS = (

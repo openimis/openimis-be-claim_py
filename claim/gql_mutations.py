@@ -44,7 +44,7 @@ from claim.services import (
     set_feedback_prompt_validity_to_to_current_date,
     set_claims_status,
 )
-from claim.validations import REJECTION_REASON_INVALID_CLAIM, delete_claim_dedrems
+from claim.validations import REJECTION_REASON_INVALID_CLAIM, delete_claim_dedrems, DedRemBatch
 from django.db import transaction
 
 logger = logging.getLogger(__name__)
@@ -733,15 +733,17 @@ class SubmitClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
             )
             remaining_uuid = list(map(str.upper, uuids))
 
-        # earlier claims first, so a later claim counts them once they are settled
-        for claim in order_by_target_date(claims):
-            if remaining_uuid:
-                remaining_uuid.remove(claim.uuid.upper())
-            subm_claim, error = service.submit_claim(claim, user)
-            if error:
-                c_errors += error
-            if c_errors:
-                errors.append({"title": claim.code, "list": c_errors})
+        # earlier claims first, so a later claim counts them once they are settled; the
+        # later claims outside the batch are recalculated once, when the batch ends
+        with DedRemBatch(user):
+            for claim in order_by_target_date(claims):
+                if remaining_uuid:
+                    remaining_uuid.remove(claim.uuid.upper())
+                subm_claim, error = service.submit_claim(claim, user)
+                if error:
+                    c_errors += error
+                if c_errors:
+                    errors.append({"title": claim.code, "list": c_errors})
         if len(remaining_uuid):
             c_errors.append(
                 {
@@ -1151,22 +1153,24 @@ class ProcessClaimsMutation(OpenIMISMutation, ClaimSubmissionStatsMixin):
             )
         )
         remaining_uuid = list(map(str.upper, uuids))
-        # earlier claims first, so a later claim counts them once they are settled
-        for claim in order_by_target_date(claims):
-            remaining_uuid.remove(claim.uuid.upper())
-            logger.debug("ProcessClaimsMutation: processing %s", claim.uuid)
-            c_errors = []
-            claim.save_history()
-            claim.audit_user_id_process = user.id_for_audit
-            logger.debug("ProcessClaimsMutation: validating claim %s", claim.uuid)
-            c_errors += processing_claim(claim, user, True)
-            logger.debug(
-                "ProcessClaimsMutation: claim %s set processed or valuated", claim.uuid
-            )
+        # earlier claims first, so a later claim counts them once they are settled; the
+        # later claims outside the batch are recalculated once, when the batch ends
+        with DedRemBatch(user):
+            for claim in order_by_target_date(claims):
+                remaining_uuid.remove(claim.uuid.upper())
+                logger.debug("ProcessClaimsMutation: processing %s", claim.uuid)
+                c_errors = []
+                claim.save_history()
+                claim.audit_user_id_process = user.id_for_audit
+                logger.debug("ProcessClaimsMutation: validating claim %s", claim.uuid)
+                c_errors += processing_claim(claim, user, True)
+                logger.debug(
+                    "ProcessClaimsMutation: claim %s set processed or valuated", claim.uuid
+                )
 
-            if c_errors:
-                errors.append({"title": claim.code, "list": c_errors})
-            claim.save()
+                if c_errors:
+                    errors.append({"title": claim.code, "list": c_errors})
+                claim.save()
         if len(remaining_uuid):
             errors.append({
                 "title": _("error"),

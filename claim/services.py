@@ -36,6 +36,7 @@ from .validations import (
     get_claim_category,
     process_dedrem,
     delete_claim_dedrems,
+    DedRemBatch,
     REJECTION_REASON_INVALID_CLAIM,
 )
 from django.db.models import Subquery, F, OuterRef, Sum, FloatField
@@ -1065,17 +1066,19 @@ def update_claims_dedrems(uuids, user, claims=None):
     remaining_uuid = list(map(UUID, uuids)) if uuids else []
     from core.utils import TimeUtils
 
-    # earlier claims first, so a later claim counts them once they are settled
-    for claim in order_by_target_date(claims):
-        if uuids:
-            remaining_uuid.remove(UUID(claim.uuid))
-        logger.debug(f"delivering review on {claim.uuid}, reprocessing dedrem ({user})")
-        # review delivery is a stage change: stamp it before the DedRem is recomputed
-        now = TimeUtils.now()
-        claim.validity_from_review = now
-        claim.validity_from = now
-        claim.save()
-        errors += processing_claim(claim, user, False)
+    # earlier claims first, so a later claim counts them once they are settled; the
+    # later claims outside the batch are recalculated once, when the batch ends
+    with DedRemBatch(user):
+        for claim in order_by_target_date(claims):
+            if uuids:
+                remaining_uuid.remove(UUID(claim.uuid))
+            logger.debug(f"delivering review on {claim.uuid}, reprocessing dedrem ({user})")
+            # review delivery is a stage change: stamp it before the DedRem is recomputed
+            now = TimeUtils.now()
+            claim.validity_from_review = now
+            claim.validity_from = now
+            claim.save()
+            errors += processing_claim(claim, user, False)
     if len(remaining_uuid):
         errors.append(
             _("claim.validation.id_does_not_exist") % {"id": ",".join(remaining_uuid)}

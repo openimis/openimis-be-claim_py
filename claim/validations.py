@@ -1,5 +1,6 @@
 
 import logging
+import threading
 from collections import namedtuple, defaultdict
 from decimal import Decimal
 from claim.models import (
@@ -90,7 +91,7 @@ def delete_claim_dedrems(claim, user=None):
     deleted = delete_old_dedrems(claim)
     if deleted:
         logger.debug(f"claim {claim.uuid}: DedRem deleted on {list(deleted)}")
-        recalculate_later_dedrems(claim, deleted, user)
+    recalculate_later_dedrems(claim, deleted, user)
     return deleted
 
 
@@ -294,6 +295,53 @@ def fetch_previous_dedrems(claim, policy, product, status):
     return split_dedrems(claim, status, policy, product)[0]
 
 
+class DedRemBatch:
+    """
+    Context for a batch of claims (submit, review delivery, process) handled in
+    ascending reference date.
+
+    Inside the batch, each claim counts the earlier claims of the batch as they
+    were just settled, so their DedRem changes do not cascade from one batch claim
+    to another: the cascades are collected, and run once when the batch ends, on
+    the later in-scope claims that are not part of the batch. The batch claims are
+    therefore computed once each. Batches nest: an inner batch joins the outer one.
+    No cascade runs when the batch ends with an exception.
+    """
+
+    _local = threading.local()
+
+    def __init__(self, user=None):
+        self.user = user
+        self.changes = []
+        self.claim_ids = set()
+
+    @classmethod
+    def current(cls):
+        return getattr(cls._local, "batch", None)
+
+    def __enter__(self):
+        outer = DedRemBatch.current()
+        if outer is not None:
+            self._outer = outer
+            return outer
+        self._outer = None
+        DedRemBatch._local.batch = self
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._outer is not None:
+            return False
+        DedRemBatch._local.batch = None
+        if exc_type is None and self.changes:
+            _recalculate_later_dedrems(self.changes, self.user, exclude=self.claim_ids)
+        return False
+
+    def add(self, claim, scopes):
+        self.claim_ids.add(claim.id)
+        if scopes:
+            self.changes.append((claim, scopes))
+
+
 def recalculate_later_dedrems(claim, scopes, user=None):
     """
     Recompute the DedRem of the claims that counted `claim`, after its DedRem was
@@ -304,20 +352,36 @@ def recalculate_later_dedrems(claim, scopes, user=None):
     split_dedrems returns as to_recalculate on any of them. They are recomputed
     once each, in reference date order, at the stage their row already had, and
     without cascading further. A processed or valuated claim is never touched.
+
+    Inside a DedRemBatch, the change is only recorded: the batch recalculates once,
+    when it ends, the later claims outside it.
+    """
+    batch = DedRemBatch.current()
+    if batch is not None:
+        batch.add(claim, scopes)
+        return
+    _recalculate_later_dedrems([(claim, scopes)], user)
+
+
+def _recalculate_later_dedrems(changes, user=None, exclude=()):
+    """
+    Recompute, once each and in reference date order, the claims that split_dedrems
+    returns as to_recalculate for any of the (claim, scopes) `changes`, except the
+    claims in `exclude`. The recalculation itself does not cascade.
     """
     candidates = {}
-    for policy, status in scopes.values():
-        _, to_recalculate = split_dedrems(claim, status, policy, policy.product)
-        for row in to_recalculate:
-            candidates.setdefault(row.claim_id, row)
+    for claim, scopes in changes:
+        for policy, status in scopes.values():
+            _, to_recalculate = split_dedrems(claim, status, policy, policy.product)
+            for row in to_recalculate:
+                if row.claim_id not in exclude:
+                    candidates.setdefault(row.claim_id, row)
     for row in sorted(
         candidates.values(),
         key=lambda r: (get_claim_target_date(r.claim), r.claim_id),
     ):
         later_claim = Claim.objects.get(id=row.claim_id)
-        logger.debug(
-            f"claim {claim.uuid} changed: recalculating DedRem of claim {later_claim.uuid}"
-        )
+        logger.debug(f"DedRem changed: recalculating DedRem of claim {later_claim.uuid}")
         process_dedrem(later_claim, user, status=row.status, cascade=False)
 
 
@@ -1160,8 +1224,8 @@ def process_dedrem(
 
     The claim's previous rows are deleted first. `status` defaults to the claim's
     stage (get_dedrem_status). With `cascade`, the later claims that counted this
-    claim are then recalculated (recalculate_later_dedrems); the recalculation
-    itself runs without cascade.
+    claim are then recalculated (recalculate_later_dedrems), or, inside a
+    DedRemBatch, when the batch ends; the recalculation itself runs without cascade.
 
     Returns the list of errors.
     """
@@ -1173,7 +1237,7 @@ def process_dedrem(
     scopes = delete_old_dedrems(claim)
     policies = fetch_policies(claim, target_date, policies)
     if not policies:
-        if cascade and scopes:
+        if cascade:
             recalculate_later_dedrems(claim, scopes, user)
         return [
             {
@@ -1277,7 +1341,7 @@ def process_dedrem(
     errors.extend(
         update_claim_status(claim, is_process, claim_deductibles, user, products_id)
     )
-    if cascade and scopes:
+    if cascade:
         recalculate_later_dedrems(claim, scopes, user)
     return errors
 

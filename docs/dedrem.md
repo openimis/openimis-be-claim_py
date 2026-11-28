@@ -62,7 +62,10 @@ without cascading further. They are the claims whose rows:
 - belong to a claim with a later reference date.
 
 Submit, review delivery and process batches handle their claims in reference
-date order, so an earlier claim is settled before a later one counts it.
+date order (`DedRemBatch`): each claim counts the earlier claims of the batch as
+they were just settled, so there is no cascade between claims of the same batch,
+and each is computed once. When the batch ends, one cascade recalculates the
+later in-scope claims that are not part of the batch.
 
 Concurrent submissions on the same policy are not locked against each other.
 
