@@ -15,6 +15,7 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * tblClaim  > Claim
 * tblClaimItems > ClaimItem
 * tblClaimServices > ClaimService
+* tblClaimDedRem > ClaimDedRem (deductibles and ceilings, see [docs/dedrem.md](docs/dedrem.md))
 * claim_ClaimAttachment > ClaimAttachment
 
 ## Listened Django Signals
@@ -33,6 +34,7 @@ It is dedicated to be deployed as a module of [openimis-be_py](https://github.co
 * claim_admins_str
 * claim_officers
 * claim_attachments
+* claim_ded_rems, claim_ded_rem_sum (see [docs/dedrem.md](docs/dedrem.md))
 
 ## GraphQL Mutations - each mutation emits default signals and return standard error lists (cfr. openimis-be-core_py)
 * create_claim
