@@ -31,7 +31,6 @@ from claim.validations import validate_claim
 from core.models.openimis_graphql_test_case import BaseTestContext, openIMISGraphQLTestCase
 from core.test_helpers import create_test_interactive_user
 from insuree.test_helpers import create_test_insuree
-from location.test_helpers import create_test_health_facility
 from medical.test_helpers import create_test_item
 from medical_pricelist.test_helpers import add_item_to_hf_pricelist
 from policy.test_helpers import create_test_policy2
