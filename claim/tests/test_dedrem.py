@@ -15,9 +15,13 @@ from unittest import mock
 
 from django.test import TestCase, override_settings
 
-from claim.gql_mutations import ProcessClaimsMutation, set_claim_deleted
+from claim.gql_mutations import (
+    DeliverClaimsReviewMutation,
+    ProcessClaimsMutation,
+    set_claim_deleted,
+)
 from claim.models import Claim, ClaimDedRem, ClaimItem
-from claim.services import processing_claim, set_claims_status, update_claims_dedrems
+from claim.services import processing_claim, update_claims_dedrems
 from claim.test_helpers import (
     create_test_claim,
     create_test_claimitem,
@@ -104,9 +108,9 @@ class DedRemScenarioMixin:
         return claim
 
     def deliver_review(self, claim):
-        """What DeliverClaimsReviewMutation does on an unchanged claim."""
-        set_claims_status([claim.uuid], "review_status", Claim.REVIEW_DELIVERED)
-        errors = update_claims_dedrems([claim.uuid], self.user)
+        """DeliverClaimsReviewMutation on an unchanged claim."""
+        with override_settings(ROW_SECURITY=False):
+            errors = DeliverClaimsReviewMutation.async_mutate(self.user, uuids=[claim.uuid])
         self.assertEqual(errors, [])
         claim.refresh_from_db()
 
@@ -373,12 +377,11 @@ class DedRemBatchOrderTest(DedRemScenarioMixin, TestCase):
     def test_review_delivery_batch_handles_claims_by_reference_date(self):
         claim_a, claim_b, claim_c = self._submit_later_claim_first()
         outside_row = self.row(claim_c)
-        set_claims_status(
-            [claim_b.uuid, claim_a.uuid], "review_status", Claim.REVIEW_DELIVERED
-        )
         counter = self._count_dedrem_computations()
 
-        errors = update_claims_dedrems([claim_b.uuid, claim_a.uuid], self.user)
+        errors = DeliverClaimsReviewMutation.async_mutate(
+            self.user, uuids=[claim_b.uuid, claim_a.uuid]
+        )
 
         self.assertEqual(errors, [])
         self.assertEqual(self.row(claim_a).rem_g, 700)

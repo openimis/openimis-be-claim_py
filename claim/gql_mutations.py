@@ -938,16 +938,42 @@ class DeliverClaimsReviewMutation(OpenIMISMutation):
         logger.error("SaveClaimReviewMutation")
         if not user.has_perms(ClaimConfig.gql_mutation_deliver_claim_review_perms):
             raise PermissionDenied(_("unauthorized"))
-        errors = set_claims_status(
-            data["uuids"],
-            "review_status",
-            Claim.REVIEW_DELIVERED,
-            {"audit_user_id_review": user.id_for_audit},
-            user=user,
+        uuids = data["uuids"]
+        claims = order_by_target_date(
+            Claim.get_queryset(
+                Claim.objects.filter(uuid__in=uuids, *Claim.filter_validity()), user
+            )
         )
-        # OMT-208 update the dedrem for the reviewed claims
-        errors += update_claims_dedrems(data["uuids"], user)
-
+        errors = []
+        delivered = set()
+        # The DedRem stage is derived from the claim (reviewed = checked with its
+        # review delivered), so a claim is marked delivered only when its DedRem is
+        # recomputed: delivering the whole batch first would make the rows of its
+        # later claims look reviewed before they are. Earlier claims first; the
+        # later claims outside the batch are recalculated once, when it ends.
+        with DedRemBatch(user):
+            for claim in claims:
+                delivered.add(claim.uuid.upper())
+                errors += set_claims_status(
+                    [claim.uuid],
+                    "review_status",
+                    Claim.REVIEW_DELIVERED,
+                    {"audit_user_id_review": user.id_for_audit},
+                    user=user,
+                )
+                # OMT-208 update the dedrem for the reviewed claim
+                errors += update_claims_dedrems([claim.uuid], user)
+        missing = [uuid for uuid in uuids if str(uuid).upper() not in delivered]
+        if missing:
+            # reported as not found, as before
+            errors += set_claims_status(
+                missing,
+                "review_status",
+                Claim.REVIEW_DELIVERED,
+                {"audit_user_id_review": user.id_for_audit},
+                user=user,
+            )
+            errors += update_claims_dedrems(missing, user)
         return errors
 
 
