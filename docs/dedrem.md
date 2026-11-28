@@ -14,13 +14,19 @@ such rows are ignored everywhere).
 
 ## When the DedRem is computed
 
-| Event | Status of the row | Amounts written on the claim |
+| Event | Stage of the row | Amounts written on the claim |
 |---|---|---|
 | Submission (the claim becomes checked) | `CHECKED` | no |
 | Review delivery | `REVIEWED` | no |
 | Processing | `PROCESSED` | yes: deducted, exceeding ceiling and remunerated amounts |
 
-`ClaimDedRem.status` is ordered `CHECKED < REVIEWED < PROCESSED`.
+The stage is ordered `CHECKED < REVIEWED < PROCESSED`. In this release it is not
+stored: `ClaimDedRem.status` is derived from the claim (`ClaimDedRem.stage_of`, and
+`ClaimDedRem.stage_expression()` in queries): processed when the claim is
+processed or valuated, reviewed when it is checked with its review delivered,
+checked otherwise. The row is recomputed at each stage change, so this is the
+stage it was computed at. (From the next release on, develop stores it in a
+`Status` column.)
 
 Review delivery and processing first stamp the claim (`validity_from_review` or
 `process_stamp`, and `validity_from`); a claim update sets `validity_from`. A
@@ -57,7 +63,7 @@ without cascading further. They are the claims whose rows:
 
 - are in the scope above (the union of the deductible and ceiling levels:
   none for treatment-level limits only);
-- have a status lower than or equal to the changed claim's, and are never
+- have a stage lower than or equal to the changed claim's, and are never
   processed (a processed or valuated claim is never changed);
 - belong to a claim with a later reference date.
 
